@@ -73,37 +73,195 @@ Research this with parallel_search operation=task processor=core.
 Answer with citations via exa_search operation=answer.
 ```
 
-### `exa_search` parameters (summary)
+Mode semantics, costs, and pick-this-vs-that tables: **[docs/MODES.md](./docs/MODES.md)**.
 
-| Param | Notes |
-|---|---|
-| `query` | Required for search/answer |
-| `operation` | `search` (default) \| `answer` \| `contents` |
-| `type` | `auto` \| `fast` \| `neural` \| `deep` (+ aliases) |
-| `contents` | `summary` \| `text` \| `highlights` \| `none` \| `all` |
-| `category` | company, people, research paper, news, pdf, github, … |
-| `num_results` / `limit` | 1–100 |
-| domain/date/text filters | optional |
-| `urls` | for `operation=contents` |
+---
 
-### `parallel_search` parameters (summary)
+## Settings reference
 
-| Param | Notes |
-|---|---|
-| `query` / `objective` | Natural-language goal |
-| `search_queries` | 2–3 short keyword queries preferred |
-| `operation` | `search` (default) \| `extract` \| `task` |
-| `mode` | `turbo` \| `basic` \| `advanced` (+ aliases) |
-| `max_results` / `limit` | up to 40 |
-| `include_domains` / `exclude_domains` / `location` | optional |
-| `urls` | for extract |
-| `processor` | task tier: `lite`…`ultra8x` |
-| `output_schema` | task structured output |
-| `poll_timeout_ms` | task wait budget |
+Every tool argument and env default is documented below. Values in **bold** are defaults.
 
-Full mode semantics, costs, and decision tables: **[docs/MODES.md](./docs/MODES.md)**.
+### `exa_search` — shared / routing
 
-## Configuration
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`query`** | string | *(required for search/answer)* | Natural-language objective or question. Prefer “describe the ideal page” over bare keywords. |
+| **`operation`** | enum | **`search`** | Which Exa API to call. |
+| | | `search` | `POST /search` — ranked results (+ optional contents). |
+| | | `answer` | `POST /answer` — short grounded answer + citations. Cheaper for one factual Q. |
+| | | `contents` | `POST /contents` — fetch/parse known URLs (needs `urls`). |
+
+### `exa_search` — search type (`operation=search`)
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`type`** | enum | **`auto`** (or `OMP_EXA_DEFAULT_TYPE`) | Retrieval strategy. |
+| | | `auto` | Exa picks the path. Best everyday default. ~$0.007 + contents. |
+| | | `fast` | Faster / cheaper keyword-ish path. |
+| | | `neural` | Pure semantic similarity (“pages that mean X”). |
+| | | `deep` | Multi-angle expansion; slower (~4–12s+), higher cost (~$0.012+). Hard research. |
+| | | `keyword`, `instant` | **Aliases → `fast`**. |
+| **`num_results`** | int 1–100 | **`10`** (or `OMP_EXA_DEFAULT_NUM_RESULTS`) | How many hits to return. |
+| **`limit`** | int 1–100 | — | Alias of `num_results`. |
+
+### `exa_search` — contents packing (`operation=search`)
+
+Controls how much page body you pay for and receive per result.
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`contents`** | enum | **`summary`** (or `OMP_EXA_DEFAULT_CONTENTS`) | Content packing mode. |
+| | | `summary` | Per-result summary focused on the query. Best default for agents. |
+| | | `highlights` | Query-relevant snippet sentences. |
+| | | `text` | Longer extracted page text. |
+| | | `all` | summary + highlights + text (richest, costliest). |
+| | | `none` | Links/metadata only (cheapest). |
+| **`summary_query`** | string | = `query` | Override the focus query used for summaries. |
+| **`highlights_query`** | string | — | Focus query for highlights (also forces highlights on). |
+| **`highlights_per_url`** | int 1–10 | 3 if set path used | How many highlight chunks per URL. |
+| **`highlights_num_sentences`** | int 1–20 | 3 if set path used | Sentences per highlight chunk. |
+| **`text_max_characters`** | int 100–50000 | 2000 if set path used | Cap extracted text length (also forces text on). |
+
+### `exa_search` — verticals & filters (`operation=search`)
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`category`** | enum | — | Restrict to an Exa vertical index: `company`, `people`, `research paper`, `news`, `pdf`, `github`, `personal site`, `financial report`, `tweet`. Use when you know the entity type. |
+| **`include_domains`** | string[] | — | Only these domains (e.g. `["arxiv.org","openai.com"]`). |
+| **`exclude_domains`** | string[] | — | Drop these domains. |
+| **`start_published_date`** | ISO string | — | Lower bound on page published date. |
+| **`end_published_date`** | ISO string | — | Upper bound on page published date. |
+| **`start_crawl_date`** | ISO string | — | Lower bound on when Exa crawled the page. |
+| **`end_crawl_date`** | ISO string | — | Upper bound on crawl date. |
+| **`include_text`** | string[] (≤5) | — | Require these phrases somewhere on the page. |
+| **`exclude_text`** | string[] (≤5) | — | Exclude pages containing these phrases. |
+| **`additional_queries`** | string[] (≤5) | — | Extra query angles. Pairs especially well with `type=deep`. |
+| **`user_location`** | string | — | ISO country bias, e.g. `US`, `DE`. |
+| **`moderation`** | bool | — | When `true`, enable Exa moderation filtering. |
+| **`livecrawl`** | string | — | Livecrawl preference when supported (e.g. `fallback`, `preferred`). |
+| **`max_age_hours`** | int ≥0 | — | Prefer fresher pages when supported. |
+
+### `exa_search` — answer (`operation=answer`)
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`query`** | string | required | The question to answer. |
+| **`text`** | bool | **`false`** | When `true`, include source text alongside citations. |
+
+Observed cost: ~$0.005 per answer on a typical short question.
+
+### `exa_search` — contents fetch (`operation=contents`)
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`urls`** | string[] (≤20) | **required** | URLs to fetch/parse through Exa. |
+| **`query`** | string | optional | If set, used as the summary focus for each URL. |
+
+Always requests text + highlights; summary only when `query` is set.
+
+### `exa_search` — environment defaults
+
+| Env | Default | Effect |
+|---|---|---|
+| `EXA_API_KEY` | — | Auth fallback after omp session `/login` Exa key. |
+| `OMP_EXA_DEFAULT_TYPE` | `auto` | Default `type` when the model omits it. |
+| `OMP_EXA_DEFAULT_NUM_RESULTS` | `10` | Default result count. |
+| `OMP_EXA_DEFAULT_CONTENTS` | `summary` | Default contents packing. |
+
+---
+
+### `parallel_search` — shared / routing
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`query`** | string | usually required | Primary natural-language objective. Used as both objective and a keyword query when others are omitted. |
+| **`objective`** | string | = `query` | Natural-language goal (“compare X vs Y for agent research”). Preferred over bare keywords. |
+| **`operation`** | enum | **`search`** | Which Parallel API to call. |
+| | | `search` | `POST /v1/search` — objective + keyword queries → ranked URLs with long excerpts. |
+| | | `extract` | `POST /v1/extract` — excerpts/full content for known URLs (needs `urls`). |
+| | | `task` | `POST /v1/tasks/runs` + poll — Deep Research processor that synthesizes an answer. |
+
+### `parallel_search` — search mode (`operation=search`)
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`mode`** | enum | **`advanced`** (or `OMP_PARALLEL_DEFAULT_MODE`) | V1 Search quality tier. |
+| | | `turbo` | Fastest/cheapest (~$0.001 / 10 results). High-volume skim. |
+| | | `basic` | Balanced everyday agent search (~$0.005). |
+| | | `advanced` | Highest quality retrieval + compression (~$0.005 list). Best default. |
+| | | `fast`, `one-shot`, `one-shot-new` | **Aliases → `basic`**. |
+| | | `agentic`, `research`, `comprehensive`, `parallel` | **Aliases → `advanced`**. |
+| | | `minimal` | **Alias → `turbo`**. |
+| **`search_queries`** | string[] (≤10) | auto from `query` | Short **keyword** queries (3–6 words each). Prefer **2–3**. Parallel quality depends on these more than on a long objective alone. |
+| **`max_results`** | int 1–40 | **10** | Cap on returned results. |
+| **`limit`**, **`num_results`** | int 1–40 | — | Aliases of `max_results`. |
+| **`max_chars_per_result`** | int 200–50000 | API default | Max excerpt characters per result. |
+| **`max_chars_total`** | int 500–500000 | — | Cap total characters across the whole response. |
+| **`include_domains`** | string[] | — | Source policy: only these domains. |
+| **`exclude_domains`** | string[] | — | Source policy: drop these domains. |
+| **`location`** | string | — | ISO 3166-1 alpha-2 country code (e.g. `us`). |
+| **`live_fetch`** | bool | — | When `true`, force live fetch (`max_age_seconds=0`) — fresher, higher latency. |
+| **`max_age_seconds`** | int ≥0 | — | Accept cached pages up to this age. Ignored if `live_fetch=true`. |
+| **`session_id`** | string | — | Correlate this search with a later `extract` in the same workflow. |
+| **`client_model`** | string | — | Optional client model label sent to Parallel for telemetry. |
+
+**How to write a good Parallel search**
+
+1. Set **`objective`** to the natural-language goal.
+2. Pass **2–3 short `search_queries`** (keyword style).
+3. If you only pass `query`, the tool uses it as both objective and the sole search query.
+
+### `parallel_search` — extract (`operation=extract`)
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`urls`** | string[] (≤20) | **required** | URLs to extract. |
+| **`excerpts`** | bool | **`true`** | Include focused excerpts. |
+| **`full_content`** | bool | **`false`** | Include full page content (larger/slower). |
+| **`objective`** / **`query`** | string | — | Focus what the excerpts should capture. |
+| **`search_queries`** | string[] | — | Extra keyword focus for extraction. |
+| **`max_chars_total`** | int | — | Cap total returned characters. |
+| **`session_id`** | string | — | Tie extract back to a prior search. |
+| **`client_model`** | string | — | Optional telemetry label. |
+
+### `parallel_search` — task / deep research (`operation=task`)
+
+Creates a Parallel Task run and **polls until completion** (or timeout).
+
+| Setting | Type | Default | What it does |
+|---|---|---|---|
+| **`processor`** | enum | **`base`** (or `OMP_PARALLEL_DEFAULT_PROCESSOR`) | Research depth/cost tier. |
+| | | `lite` | Narrow, cheapest (~$0.005 / run). |
+| | | `base` | Standard research (~$0.01). |
+| | | `core` | Stronger multi-hop (~$0.025). |
+| | | `pro` | Hard questions (~$0.10). |
+| | | `ultra` | Deep (~$0.30). |
+| | | `ultra2x` / `ultra4x` / `ultra8x` | Max depth/breadth (up to ~$2.40). |
+| **`query`** / **`objective`** / **`task_input`** | string or object | one required | Task input. `task_input` wins if set; else objective/query text. |
+| **`output_schema`** | string \| object | — | Shape of the answer. |
+| | | plain string | Treated as a **text** schema description. |
+| | | `{ "type": "auto" }` | Let Parallel choose the schema. |
+| | | `{ "type": "text", "description": "…" }` | Explicit text schema. |
+| | | `{ "type": "json", "json_schema": {…} }` | Explicit JSON schema wrapper. |
+| | | bare JSON Schema object | Wrapped as `{ type: "json", json_schema: … }`. |
+| **`previous_interaction_id`** | string | — | Continue from a prior Parallel interaction. |
+| **`include_domains`** / **`exclude_domains`** | string[] | — | Source policy applied to the task run. |
+| **`poll_timeout_ms`** | int 5000–900000 | **`180000`** (or `OMP_PARALLEL_MAX_POLL_MS`) | Max wait for the run to finish before erroring. |
+
+List prices from [Parallel pricing](https://docs.parallel.ai/getting-started/pricing); your plan may differ.
+
+### `parallel_search` — environment defaults
+
+| Env | Default | Effect |
+|---|---|---|
+| `PARALLEL_API_KEY` | — | Auth fallback after omp session `/login` Parallel key. |
+| `OMP_PARALLEL_DEFAULT_MODE` | `advanced` | Default search `mode` when omitted. |
+| `OMP_PARALLEL_DEFAULT_PROCESSOR` | `base` | Default task `processor` when omitted. |
+| `OMP_PARALLEL_MAX_POLL_MS` | `180000` | Default task poll budget (ms). |
+
+---
+
+## Configuration cheat sheet
 
 | Env | Default | Meaning |
 |---|---|---|
@@ -115,6 +273,8 @@ Full mode semantics, costs, and decision tables: **[docs/MODES.md](./docs/MODES.
 | `OMP_PARALLEL_DEFAULT_MODE` | `advanced` | Default Parallel search mode |
 | `OMP_PARALLEL_DEFAULT_PROCESSOR` | `base` | Default task processor |
 | `OMP_PARALLEL_MAX_POLL_MS` | `180000` | Task poll budget |
+
+Auth order for both tools: **omp session key** (`ctx.modelRegistry.authStorage`) → **env var**.
 
 ## How it works
 
