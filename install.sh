@@ -2,8 +2,8 @@
 # Install omp-search custom tools (exa_search + parallel_search) into the user omp tools dir.
 # Opt-in flags:
 #   --with-confirm-rule   install ~/.omp/agent/rules/omp-search-confirm.md (recommend-first UX)
-#   --with-approval-gate  set tools.approval.exa_search/parallel_search=prompt in config.yml
-#   --with-gate           both of the above (full x_search-style gate)
+#   --with-approval-gate  set tools.approval.exa_search/parallel_search=allow in config.yml
+#   --with-gate           both of the above (recommend-first rule + explicit allow policy)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,8 +20,8 @@ Usage: ./install.sh [--with-confirm-rule] [--with-approval-gate] [--with-gate]
 
   (default)              Install exa_search.ts + parallel_search.ts only
   --with-confirm-rule    Also install the recommend-first agent rule
-  --with-approval-gate   Also set per-tool approval: prompt in config.yml
-  --with-gate            Both confirm rule + approval gate (recommended opt-in UX)
+  --with-approval-gate   Also set per-tool approval: allow in config.yml
+  --with-gate            Both confirm rule + explicit allow policy (recommended opt-in UX)
 EOF
 }
 
@@ -72,10 +72,10 @@ if [[ "$WITH_APPROVAL_GATE" -eq 1 ]]; then
     cat >"$CONFIG_YML" <<'YAML'
 tools:
   approval:
-    exa_search: prompt
-    parallel_search: prompt
+    exa_search: allow
+    parallel_search: allow
 YAML
-    echo "Created $CONFIG_YML with tools.approval prompt for exa_search + parallel_search"
+    echo "Created $CONFIG_YML with tools.approval=allow for exa_search + parallel_search"
   else
     python3 - "$CONFIG_YML" <<'PY'
 import sys
@@ -84,8 +84,8 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text()
 
-def ensure_prompt(src: str, tool: str) -> str:
-    # If tool already has an approval line, leave it (user may have chosen allow/deny).
+def ensure_policy(src: str, tool: str) -> str:
+    # If tool already has an approval line, leave it (user may have chosen allow/prompt/deny).
     import re
     if re.search(rf"(?m)^\s*{re.escape(tool)}\s*:", src):
         return src
@@ -103,21 +103,21 @@ def ensure_prompt(src: str, tool: str) -> str:
         m = re.search(r"(?m)^(  approval\s*:\s*\n)((?:    .*\n)*)", src)
         if m:
             block = m.group(2)
-            insertion = f"    {tool}: prompt\n"
+            insertion = f"    {tool}: allow\n"
             src = src[: m.end(1)] + block + insertion + src[m.end() :]
         else:
             # fallback append
             if not src.endswith("\n"):
                 src += "\n"
-            src += f"  approval:\n    {tool}: prompt\n"
+            src += f"  approval:\n    {tool}: allow\n"
     return src
 
 orig = text
-text = ensure_prompt(text, "exa_search")
-text = ensure_prompt(text, "parallel_search")
+text = ensure_policy(text, "exa_search")
+text = ensure_policy(text, "parallel_search")
 if text != orig:
     path.write_text(text)
-    print(f"Updated {path} — set missing tools.approval.exa_search/parallel_search to prompt")
+    print(f"Updated {path} — set missing tools.approval.exa_search/parallel_search to allow")
 else:
     print(f"Left {path} unchanged (approval entries already present)")
 PY
