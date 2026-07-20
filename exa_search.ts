@@ -15,7 +15,7 @@
  * Env knobs:
  *   OMP_EXA_DEFAULT_TYPE          auto|fast|neural|deep   (default auto)
  *   OMP_EXA_DEFAULT_NUM_RESULTS   number                  (default 10)
- *   OMP_EXA_DEFAULT_CONTENTS      summary|text|highlights|none  (default summary)
+ *   OMP_EXA_DEFAULT_CONTENTS      summary|text|highlights|none|all  (default summary)
  */
 
 const EXA_SEARCH_URL = "https://api.exa.ai/search";
@@ -63,9 +63,8 @@ function asStringArray(value, max = 50) {
 
 function normalizeType(type) {
 	const t = (type || DEFAULT_TYPE).toLowerCase();
-	if (t === "keyword") return "fast";
-	if (VALID_TYPES.has(t)) return t === "instant" ? "fast" : t;
-	return "auto";
+	if (t === "keyword" || t === "instant") return "fast";
+	return VALID_TYPES.has(t) ? t : "auto";
 }
 
 function buildContents(params) {

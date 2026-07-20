@@ -337,7 +337,7 @@ function formatTaskForLLM(run, result) {
 		return lines.join("\n");
 	}
 
-	if (output.type === "json" || output.content != null && typeof output.content === "object") {
+		if (output.type === "json" || (output.content != null && typeof output.content === "object")) {
 		lines.push("## Structured output");
 		lines.push("```json");
 		lines.push(JSON.stringify(output.content ?? output, null, 2).slice(0, 20000));
@@ -435,8 +435,11 @@ const factory = (host) => {
 					// accepted aliases
 					"fast",
 					"one-shot",
+					"one-shot-new",
 					"agentic",
 					"research",
+					"comprehensive",
+					"parallel",
 					"minimal",
 				])
 				.optional()
