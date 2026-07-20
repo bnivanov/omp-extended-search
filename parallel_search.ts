@@ -484,6 +484,79 @@ const factory = (host) => {
 				.describe("Max time to wait for task completion (default 180000)."),
 		}),
 
+		formatApprovalDetails(args) {
+			const a = args || {};
+			const operation = VALID_OPS.has(a.operation) ? a.operation : "search";
+			const lines = [`Operation: ${operation}${a.operation ? "" : " (default)"}`];
+
+			if (operation === "extract") {
+				const urls = Array.isArray(a.urls) ? a.urls.filter(Boolean) : [];
+				lines.push(`URLs: ${urls.length}`);
+				if (urls.length) lines.push(`First URL: ${urls[0]}`);
+				lines.push(
+					`Excerpts: ${a.excerpts === false ? "off" : "on"}  |  Full content: ${a.full_content ? "on" : "off"}`,
+				);
+				const focus = a.objective || a.query;
+				if (focus) lines.push(`Focus: ${focus}`);
+				if (a.session_id) lines.push(`Session: ${a.session_id}`);
+				return lines;
+			}
+
+			if (operation === "task") {
+				const processor = normalizeProcessor(a.processor);
+				const inputPreview =
+					typeof a.task_input === "string"
+						? a.task_input
+						: a.task_input && typeof a.task_input === "object"
+							? JSON.stringify(a.task_input).slice(0, 160)
+							: a.objective || a.query || "(none)";
+				lines.push(`Processor: ${processor}${a.processor ? "" : " (default)"}`);
+				lines.push(`Input: ${String(inputPreview).slice(0, 200)}`);
+				if (a.output_schema != null) {
+					const schemaLabel =
+						typeof a.output_schema === "string"
+							? `text: ${a.output_schema.slice(0, 80)}`
+							: a.output_schema.type
+								? `type=${a.output_schema.type}`
+								: "json schema";
+					lines.push(`Output schema: ${schemaLabel}`);
+				}
+				const poll = clampInt(a.poll_timeout_ms, DEFAULT_POLL_MS, 5000, 900000);
+				lines.push(`Poll timeout: ${poll}ms${a.poll_timeout_ms != null ? "" : " (default)"}`);
+				if (Array.isArray(a.include_domains) && a.include_domains.length) {
+					lines.push(`Include domains: ${a.include_domains.join(", ")}`);
+				}
+				if (Array.isArray(a.exclude_domains) && a.exclude_domains.length) {
+					lines.push(`Exclude domains: ${a.exclude_domains.join(", ")}`);
+				}
+				return lines;
+			}
+
+			// search
+			const mode = normalizeMode(a.mode);
+			const objective = a.objective || a.query || "(none)";
+			const queries = Array.isArray(a.search_queries) ? a.search_queries.filter(Boolean) : [];
+			const maxResults = clampInt(a.max_results ?? a.limit ?? a.num_results, 10, 1, 40);
+			lines.push(`Objective: ${String(objective).slice(0, 200)}`);
+			lines.push(
+				`Mode: ${mode}${a.mode ? "" : " (default)"}  |  Results: ${maxResults}${a.max_results != null || a.limit != null || a.num_results != null ? "" : " (default)"}`,
+			);
+			if (queries.length) lines.push(`Search queries: ${JSON.stringify(queries)}`);
+			else lines.push("Search queries: (auto from query)");
+			if (Array.isArray(a.include_domains) && a.include_domains.length) {
+				lines.push(`Include domains: ${a.include_domains.join(", ")}`);
+			}
+			if (Array.isArray(a.exclude_domains) && a.exclude_domains.length) {
+				lines.push(`Exclude domains: ${a.exclude_domains.join(", ")}`);
+			}
+			if (a.location) lines.push(`Location: ${a.location}`);
+			if (a.live_fetch) lines.push("Live fetch: on");
+			else if (a.max_age_seconds != null) lines.push(`Max age seconds: ${a.max_age_seconds}`);
+			if (a.max_chars_per_result != null) lines.push(`Max chars/result: ${a.max_chars_per_result}`);
+			if (a.session_id) lines.push(`Session: ${a.session_id}`);
+			return lines;
+		},
+
 		async execute(_toolCallId, params, onUpdate, ctx, signal) {
 			try {
 				const auth = await resolveParallelKey(ctx);

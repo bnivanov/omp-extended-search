@@ -344,6 +344,52 @@ const factory = (host) => {
 			text: z.boolean().optional().describe("For operation=answer: include source text in citations."),
 		}),
 
+		formatApprovalDetails(args) {
+			const a = args || {};
+			const operation = VALID_OPS.has(a.operation) ? a.operation : "search";
+			const lines = [`Operation: ${operation}${a.operation ? "" : " (default)"}`];
+
+			if (operation === "answer") {
+				lines.push(`Query: ${a.query ?? "(none)"}`);
+				if (a.text) lines.push("Include source text: yes");
+				return lines;
+			}
+
+			if (operation === "contents") {
+				const urls = Array.isArray(a.urls) ? a.urls.filter(Boolean) : [];
+				lines.push(`URLs: ${urls.length ? urls.length : 0}`);
+				if (a.query) lines.push(`Summary focus: ${a.query}`);
+				if (urls.length) lines.push(`First URL: ${urls[0]}`);
+				return lines;
+			}
+
+			// search
+			const type = normalizeType(a.type);
+			const num = clampInt(a.num_results ?? a.limit, DEFAULT_NUM, 1, 100);
+			const contents = (a.contents || DEFAULT_CONTENTS).toLowerCase();
+			const contentsLabel = VALID_CONTENTS.has(contents) ? contents : DEFAULT_CONTENTS;
+			lines.push(`Query: ${a.query ?? "(none)"}`);
+			lines.push(
+				`Type: ${type}${a.type ? "" : " (default)"}  |  Results: ${num}  |  Contents: ${contentsLabel}${a.contents ? "" : " (default)"}`,
+			);
+			if (a.category) lines.push(`Category: ${a.category}`);
+			if (Array.isArray(a.include_domains) && a.include_domains.length) {
+				lines.push(`Include domains: ${a.include_domains.join(", ")}`);
+			}
+			if (Array.isArray(a.exclude_domains) && a.exclude_domains.length) {
+				lines.push(`Exclude domains: ${a.exclude_domains.join(", ")}`);
+			}
+			const published = [a.start_published_date, a.end_published_date].filter(Boolean).join(" → ");
+			if (published) lines.push(`Published: ${published}`);
+			if (Array.isArray(a.additional_queries) && a.additional_queries.length) {
+				lines.push(`Additional queries: ${a.additional_queries.length}`);
+			}
+			if (a.user_location) lines.push(`Location bias: ${a.user_location}`);
+			if (a.livecrawl) lines.push(`Livecrawl: ${a.livecrawl}`);
+			if (a.max_age_hours != null) lines.push(`Max age hours: ${a.max_age_hours}`);
+			return lines;
+		},
+
 		async execute(_toolCallId, params, onUpdate, ctx, signal) {
 			try {
 				const auth = await resolveExaKey(ctx);

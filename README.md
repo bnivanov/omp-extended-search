@@ -51,6 +51,19 @@ git clone https://github.com/bnivanov/omp-search
 cd omp-search && ./install.sh
 ```
 
+**With the opt-in research gate** (recommended — same pattern as [omp-x-search](https://github.com/bnivanov/omp-x-search)):
+
+```bash
+./install.sh --with-gate
+```
+
+| Flag | What it installs |
+|---|---|
+| *(default)* | `exa_search.ts` + `parallel_search.ts` only |
+| `--with-confirm-rule` | + recommend-first agent rule |
+| `--with-approval-gate` | + `tools.approval.*.prompt` in `config.yml` |
+| `--with-gate` | both (full gate) |
+
 Or copy the two files:
 
 ```bash
@@ -60,7 +73,7 @@ cp exa_search.ts parallel_search.ts ~/.omp/agent/tools/
 
 **Project-level:** copy both files into `<repo>/.omp/tools/`.
 
-Restart open omp sessions so discovery reloads tools.
+Restart open omp sessions so discovery reloads tools (and rules, if installed).
 
 ## Usage examples
 
@@ -75,7 +88,82 @@ Answer with citations via exa_search operation=answer.
 
 Mode semantics, costs, and pick-this-vs-that tables: **[docs/MODES.md](./docs/MODES.md)**.
 
----
+## Confirm settings before research (opt-in, recommended)
+
+Which tools you call — and which Exa `type` / Parallel `mode` / task `processor` — materially change **cost, latency, and answer shape**. Like [omp-x-search](https://github.com/bnivanov/omp-x-search#confirm-settings-before-each-search-recommended), you can make the **main driver model** (Claude/GPT/Gemini/Grok — whatever is running the session) **recommend a plan and wait for your OK** before any research tool fires.
+
+Two layers; use either or both.
+
+### 1. Hard gate — tool won’t run without approval
+
+Both tools ship `formatApprovalDetails`, so a gated call shows the resolved plan:
+
+```text
+Allow tool: exa_search
+Operation: search (default)
+Query: compare Exa deep vs Parallel advanced for agent research
+Type: deep  |  Results: 10  |  Contents: summary (default)
+Category: research paper
+```
+
+```text
+Allow tool: parallel_search
+Operation: search (default)
+Objective: compare Exa deep vs Parallel advanced for agent research
+Mode: advanced (default)  |  Results: 10 (default)
+Search queries: ["exa deep search","parallel ai advanced mode"]
+```
+
+Turn the gate on in `~/.omp/agent/config.yml` (per-tool policy is honored in every mode, including `yolo`):
+
+```yaml
+tools:
+  approval:
+    exa_search: prompt      # allow | deny | prompt
+    parallel_search: prompt
+```
+
+Or let the installer do it: `./install.sh --with-approval-gate` (or `--with-gate`).
+
+Approve to run; reject and tell the agent what to change (`type=auto`, `mode=turbo`, `web only`, …).
+
+### 2. Recommend-first behavior — the conversational step
+
+Drop the rule (or `./install.sh --with-confirm-rule` / `--with-gate`):
+
+```bash
+mkdir -p ~/.omp/agent/rules
+cp rules/omp-search-confirm.md ~/.omp/agent/rules/
+```
+
+The rule tells the **session’s main model** to, on any live-web research request:
+
+1. **Restate the goal**
+2. **Recommend the tool mix** — `web_search` alone vs `exa_search` vs `parallel_search` vs a combination — based on complexity
+3. **Recommend concrete settings** (Exa `type`/`contents`/`category`, Parallel `mode`/`search_queries`/`processor`, …) with a one-clause reason for each non-default
+4. **Give a rough cost/latency band**
+5. **Wait for approval or tweaks** before calling tools
+
+Example shape:
+
+```text
+Goal: multi-hop comparison of agent memory backends with primary sources
+Recommended mix: web_search + exa_search + parallel_search
+  • web_search — cheap baseline
+  • exa_search: type=deep, contents=summary, num_results=10
+    reason: multi-angle SERP, easy to miss vendors
+  • parallel_search: mode=advanced, 3 keyword queries, max_results=10
+    reason: long excerpts for synthesis
+  (skip task/ultra unless gaps remain)
+Rough cost/latency: web free-tier + ~$0.02–0.05 Exa/Parallel search; seconds–tens of seconds
+Approve / tweak?
+```
+
+Layer 1 is enforcement (the tool literally can’t run un-approved).  
+Layer 2 is the nicer UX (you react to a recommendation instead of a bare yes/no).
+
+Skip the gate when you say “just search” / already specify exact settings / no live web is needed / follow-up extract under an already-approved plan.
+
 
 ## Settings reference
 
