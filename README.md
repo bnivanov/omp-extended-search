@@ -6,6 +6,12 @@ Install only the ones you want.
 
 | Tool | File | What it does | Credentials |
 |---|---|---|---|
+| Hacker News | `tools/hackernews_search.ts` | Full-text search over HN stories and comments (Algolia), plus the current top/new/best/ask/show/job feeds (official API). | none |
+| Feeds | `tools/feed_search.ts` | RSS/Atom reader for news, blogs, and newsletters (Substack, Medium, lab blogs). Preset bundles for AI labs and tech news, or any feed URL. | none |
+| arXiv | `tools/arxiv_search.ts` | Searches arXiv papers by text, category (cs.AI, cs.LG, cs.CL, …), author, and date. | none |
+| Reddit | `tools/reddit_search.ts` | Subreddit-scoped search with sort/time filters and optional top comments, via the official API. | `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` (free script app, see [docs/reddit.md](docs/reddit.md)) |
+| GitHub | `tools/github_search.ts` | Repository search by keyword, creation window, stars, language, topic — the proxy for "trending" (which has no API). | none needed; `GITHUB_TOKEN` or `gh auth` raises the rate limit |
+| Product Hunt | `tools/producthunt_search.ts` | Recent/top launches by topic and date (the v2 API has no keyword search — it lists, it doesn't grep). | `PRODUCTHUNT_API_TOKEN` (free developer token) |
 | X Search | `tools/x_search.ts` | Searches public posts on X (Twitter) via xAI's native search. Keyword, semantic, user, and thread search; can optionally resolve each cited post to its real text and engagement numbers. | `/login` → xAI Grok (SuperGrok or X Premium+), or `XAI_API_KEY` |
 | Exa Search | `tools/exa_search.ts` | Full Exa API: search types (`auto` / `fast` / `neural` / `deep`), vertical categories (papers, people, companies, github), domain/date filters, answer-with-citations, URL contents fetch. omp's native Exa path only ever uses `auto` + summary. | `/login` → Exa, or `EXA_API_KEY` |
 | Parallel Search | `tools/parallel_search.ts` | Full Parallel V1 API: search modes (`turbo` / `basic` / `advanced`) with objective + multi-query support, URL extract, and deep-research task processors (`lite` … `ultra8x`). omp's native path hardcodes the old beta `fast` mode. | `/login` → Parallel, or `PARALLEL_API_KEY` |
@@ -16,10 +22,12 @@ Install only the ones you want.
 git clone https://github.com/bnivanov/omp-extended-search
 cd omp-extended-search
 
-./install.sh x               # just X search
-./install.sh exa parallel    # just Exa and Parallel
-./install.sh all             # everything
-./install.sh                 # prints help, installs nothing
+./install.sh hackernews feed arxiv   # the free, no-key tools
+./install.sh x                      # just X search
+./install.sh exa parallel           # just Exa and Parallel
+./install.sh reddit                 # just Reddit
+./install.sh all                    # everything
+./install.sh                        # prints help, installs nothing
 ```
 
 Or grab a single tool without cloning the repo:
@@ -36,6 +44,12 @@ For a project-level install, copy the file into `<your-project>/.omp/tools/` ins
 
 Just ask in chat — the model picks the tool from your wording:
 
+- "What's on the front page of Hacker News right now?"
+- "Check the ai-labs feeds for anything about agents this week"
+- "Find recent arxiv papers on agent memory"
+- "Search reddit for omp reviews"
+- "Find new github repos about MCP servers"
+- "What launched on Product Hunt this week?"
 - "What's being said on X about the latest omp release?"
 - "Use exa for search: recent papers on agent memory"
 - "Use parallel for search: compare agent memory backends"
@@ -53,6 +67,12 @@ That installs a recommend-first rule for the tools you selected and sets `tools.
 
 ## Docs
 
+- [docs/hackernews.md](docs/hackernews.md) — HN search + feed parameters
+- [docs/feed.md](docs/feed.md) — feed bundles, filters, and how to build Substack/Medium/Google News feed URLs
+- [docs/arxiv.md](docs/arxiv.md) — arXiv search parameters
+- [docs/reddit.md](docs/reddit.md) — Reddit app setup (one-time) and search parameters
+- [docs/github.md](docs/github.md) — repo search qualifiers
+- [docs/producthunt.md](docs/producthunt.md) — token setup and parameters
 - [docs/x.md](docs/x.md) — x_search settings: focus, reasoning effort, date windows, handle filters, post capture
 - [docs/exa.md](docs/exa.md) — exa_search settings: types, contents packing, categories, filters, answer, contents
 - [docs/parallel.md](docs/parallel.md) — parallel_search settings: modes, extract, task processors
