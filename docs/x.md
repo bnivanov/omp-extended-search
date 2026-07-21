@@ -73,15 +73,15 @@ Per call, the driver model may pass `model` or `reasoning_effort` directly.
 
 ## Confirm settings before each search (optional)
 
-`focus`, `reasoning_effort`, `limit`, the window, and `capture` all change cost, latency, and what comes back. If you want the agent to propose settings in chat and wait for your OK first:
+`focus`, `reasoning_effort`, `limit`, the window, and `capture` all change cost, latency, and what comes back. The **global** plan-first rule covers X along with every other research tool:
 
 ```bash
 ./install.sh x --with-confirm-rule
-# or for every extended tool + web_search:
+# or once for the whole toolkit:
 ./install.sh all --with-confirm-rule
 ```
 
-That installs `rules/omp-search-confirm.md` (plan-first across web_search and all extended tools) plus `rules/x-search-confirm.md` (extra X heuristics). This is a **chat** gate — propose → you say go — not a per-call UI popup. Keep `approvalMode: yolo` (or `tools.approval.x_search: allow`) so the tool runs quietly after you approve the plan. Only use `prompt` if you want a hard dialog every call.
+That installs [rules/omp-search-confirm.md](../rules/omp-search-confirm.md) only — one always-on gate for `web_search` and all extended tools, with X heuristics included. **Chat** gate (propose → you say go), not a per-call UI popup. Keep `approvalMode: yolo` (or `tools.approval.x_search: allow`) so the tool runs quietly after you approve the plan. Only use `prompt` if you want a hard dialog every call.
 
 ## What it can't do
 

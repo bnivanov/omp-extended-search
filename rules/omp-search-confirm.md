@@ -1,6 +1,6 @@
 ---
 name: omp-search-confirm
-description: "Before any extended/web search tool, recommend source mix + settings and wait for user approval"
+description: "Global research gate: before any web/extended search tool, recommend source mix + settings and wait for chat OK"
 alwaysApply: true
 ---
 
@@ -59,10 +59,13 @@ For each tool you plan to call, list the resolved settings and a **one-clause re
 - task: `processor` (`lite`→`ultra8x`); start `lite`/`base` unless user asked deep
 
 ### If using `x_search`
-- `focus`: `relevance` (default) for pointed Qs; `volume` for broad sweeps
-- `reasoning_effort`: `high` (default) for depth; `low`/`medium` for a quick pulse
-- `limit`, `recency` or `from_date`/`to_date`, handle filters, `capture` only if real post text/engagement is needed
-- (If the dedicated x-search confirm rule is also installed, follow its extra detail.)
+- `focus` — `relevance` (default) for pointed “what’s best / is it X” questions; `volume` only for breadth, sentiment sweeps, or discovering many handles (volume = more raw posts, more repetition)
+- `reasoning_effort` — `high` (default) for depth/historical reach; `low`/`medium` for a quick pulse
+- `limit` — default `10`; raise toward `30` for volume sweeps; lower (e.g. `5`) for a tight answer
+- `from_date`/`to_date` or `recency` — pin an explicit window when the topic is time-sensitive
+- `allowed_handles`/`excluded_handles` — only when the user named specific accounts (mutually exclusive)
+- `capture` — only if they want real post text/engagement, not just the summary; default free `syndication`; `capture_provider: firecrawl` only when they explicitly want retweets/top replies and accept Firecrawl spend
+- `model` — leave default unless they want premium synthesis (`grok-4.5`)
 
 ### If using `hackernews_search`
 - `operation`: `search` (default) vs `feed` (front page lists)

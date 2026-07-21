@@ -60,7 +60,7 @@ Just ask in chat — the model picks the tool from your wording:
 1. **Install** the tool files into `~/.omp/agent/tools/` (or a project `.omp/tools/`).
 2. **Restart omp** — it picks up new tool files automatically. Ask in plain language; the model chooses the right tool.
 3. **Built-in `web_search` stays the default** for everyday lookups. These tools add lanes omp covers poorly or not at all (X, HN, Reddit, PH, arXiv, feeds, full Exa/Parallel, GitHub discovery). You can mix them: “use normal web search and also check HN + Reddit.”
-4. **Optional plan-first gate** — with the confirm rule installed, the agent does **not** fire searches immediately. It proposes which sources to use, how to structure each request, and waits for your OK (same idea as the original x/Exa/Parallel gate, now across every tool).
+4. **Optional plan-first gate** — with the global confirm rule installed, the agent does **not** fire searches immediately. It proposes which sources to use, how to structure each request, and waits for your OK — one rule over web_search and every extended tool (including X).
 
 ## Optional: confirm-before-search gate
 
@@ -72,7 +72,7 @@ Settings change cost, latency, and which corner of the internet you hit. If you'
 ./install.sh all --with-gate
 ```
 
-That installs a recommend-first **agent rule** (`rules/omp-search-confirm.md`) covering built-in `web_search` and every extended tool, plus the extra X-detail rule when `x` is included.
+That installs one global recommend-first **agent rule** ([rules/omp-search-confirm.md](rules/omp-search-confirm.md)) covering built-in `web_search` and every extended tool (HN, Reddit, PH, GitHub, arXiv, feeds, X, Exa, Parallel).
 
 **Intended UX:** the model proposes sources + parameters in the chat and waits for your “go” / tweaks. It is **not** a per-call “Approve x_search?” popup. Keep `tools.approvalMode: yolo` (omp default for many setups) or per-tool `allow` so tools run quietly after you approve the plan in chat. Only set a tool to `prompt` if you *want* a hard UI dialog every call. Say “just search” anytime to skip the chat gate for one request.
 
@@ -88,12 +88,11 @@ That installs a recommend-first **agent rule** (`rules/omp-search-confirm.md`) c
 - [docs/exa.md](docs/exa.md) — exa_search settings: types, contents packing, categories, filters, answer, contents
 - [docs/parallel.md](docs/parallel.md) — parallel_search settings: modes, extract, task processors
 
-### Agent rules (plan-first gate)
+### Agent rule (plan-first gate)
 
-- [rules/omp-search-confirm.md](rules/omp-search-confirm.md) — omnibus rule: propose source mix + settings across `web_search` and every extended tool, wait for chat OK
-- [rules/x-search-confirm.md](rules/x-search-confirm.md) — extra X heuristics (focus / effort / capture); installed with `x`
+- [rules/omp-search-confirm.md](rules/omp-search-confirm.md) — **global** rule (`alwaysApply`): propose source mix + settings across `web_search` and every extended tool, wait for chat OK. Not X-only.
 
-Install into omp with `./install.sh … --with-confirm-rule` (copies them to `~/.omp/agent/rules/`), or copy the files there yourself.
+Install into omp with `./install.sh … --with-confirm-rule` (copies it to `~/.omp/agent/rules/`), or copy the file there yourself.
 
 ## Notes
 

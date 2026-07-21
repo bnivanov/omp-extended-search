@@ -39,7 +39,7 @@ Tools (pick one or more):
   all          all of the above
 
 Extras (opt-in, applied to selected tools):
-  --with-confirm-rule    install the recommend-first agent rule(s)
+  --with-confirm-rule    install the global plan-first agent rule (all search tools)
   --with-approval-gate   set tools.approval.<tool>: allow in config.yml
   --with-gate            both extras
 
@@ -104,13 +104,13 @@ done
 
 if [[ "$WITH_CONFIRM_RULE" -eq 1 ]]; then
   mkdir -p "$RULES_DIR"
-  # Omnibus plan-first gate covers web_search + every extended tool.
+  # One global plan-first gate: web_search + every extended tool (including X).
   cp "$ROOT/rules/omp-search-confirm.md" "$RULES_DIR/omp-search-confirm.md"
   echo "Installed rule -> ${RULES_DIR}/omp-search-confirm.md"
-  # Extra x_search detail (focus/effort/capture heuristics) when X is selected.
-  if wants x; then
-    cp "$ROOT/rules/x-search-confirm.md" "$RULES_DIR/x-search-confirm.md"
-    echo "Installed rule -> ${RULES_DIR}/x-search-confirm.md"
+  # Drop legacy X-only rule if a previous install left it behind.
+  if [[ -f "$RULES_DIR/x-search-confirm.md" ]]; then
+    rm -f "$RULES_DIR/x-search-confirm.md"
+    echo "Removed legacy rule -> ${RULES_DIR}/x-search-confirm.md (folded into omp-search-confirm)"
   fi
 fi
 
@@ -196,8 +196,8 @@ wants producthunt && echo "       \"what launched on product hunt this week?\""
 if [[ "$WITH_CONFIRM_RULE" -eq 0 && "$WITH_APPROVAL_GATE" -eq 0 ]]; then
   echo
   echo "Optional: re-run with --with-gate (or --with-confirm-rule) so the agent"
-  echo "proposes which sources + settings to use and waits for your OK first."
-  echo "Covers web_search and every extended tool, not just Exa/Parallel/X."
+  echo "proposes which sources + settings to use and waits for your OK in chat."
+  echo "One global rule covers web_search and every extended tool (including X)."
 fi
 echo
 echo "Docs: docs/x.md, docs/exa.md, docs/parallel.md, docs/hackernews.md, docs/feed.md,"
