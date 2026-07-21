@@ -104,13 +104,13 @@ done
 
 if [[ "$WITH_CONFIRM_RULE" -eq 1 ]]; then
   mkdir -p "$RULES_DIR"
+  # Omnibus plan-first gate covers web_search + every extended tool.
+  cp "$ROOT/rules/omp-search-confirm.md" "$RULES_DIR/omp-search-confirm.md"
+  echo "Installed rule -> ${RULES_DIR}/omp-search-confirm.md"
+  # Extra x_search detail (focus/effort/capture heuristics) when X is selected.
   if wants x; then
     cp "$ROOT/rules/x-search-confirm.md" "$RULES_DIR/x-search-confirm.md"
     echo "Installed rule -> ${RULES_DIR}/x-search-confirm.md"
-  fi
-  if wants exa || wants parallel; then
-    cp "$ROOT/rules/omp-search-confirm.md" "$RULES_DIR/omp-search-confirm.md"
-    echo "Installed rule -> ${RULES_DIR}/omp-search-confirm.md"
   fi
 fi
 
@@ -195,8 +195,9 @@ wants github      && echo "       \"find new github repos for ...\""
 wants producthunt && echo "       \"what launched on product hunt this week?\""
 if [[ "$WITH_CONFIRM_RULE" -eq 0 && "$WITH_APPROVAL_GATE" -eq 0 ]]; then
   echo
-  echo "Optional: re-run with --with-gate to make the agent propose search settings"
-  echo "and wait for your OK before calling these tools."
+  echo "Optional: re-run with --with-gate (or --with-confirm-rule) so the agent"
+  echo "proposes which sources + settings to use and waits for your OK first."
+  echo "Covers web_search and every extended tool, not just Exa/Parallel/X."
 fi
 echo
 echo "Docs: docs/x.md, docs/exa.md, docs/parallel.md, docs/hackernews.md, docs/feed.md,"

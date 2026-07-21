@@ -77,9 +77,11 @@ Per call, the driver model may pass `model` or `reasoning_effort` directly.
 
 ```bash
 ./install.sh x --with-gate
+# or for every extended tool + web_search:
+./install.sh all --with-gate
 ```
 
-This drops `rules/x-search-confirm.md` into `~/.omp/agent/rules/` (recommend-first behavior) and sets `tools.approval.x_search: allow` in `~/.omp/agent/config.yml`. Set the policy to `prompt` for a hard approval dialog that shows the resolved plan before every run.
+That installs `rules/omp-search-confirm.md` (plan-first across web_search and all extended tools) plus `rules/x-search-confirm.md` (extra X heuristics). It can also set `tools.approval.x_search: allow` in `~/.omp/agent/config.yml`. Set the policy to `prompt` for a hard approval dialog that shows the resolved plan before every run.
 
 ## What it can't do
 

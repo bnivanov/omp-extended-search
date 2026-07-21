@@ -55,15 +55,24 @@ Just ask in chat — the model picks the tool from your wording:
 - "Use parallel for search: compare agent memory backends"
 - "Use your normal web search and expand with Exa and Parallel"
 
+## How it works with omp
+
+1. **Install** the tool files into `~/.omp/agent/tools/` (or a project `.omp/tools/`).
+2. **Restart omp** — it picks up new tool files automatically. Ask in plain language; the model chooses the right tool.
+3. **Built-in `web_search` stays the default** for everyday lookups. These tools add lanes omp covers poorly or not at all (X, HN, Reddit, PH, arXiv, feeds, full Exa/Parallel, GitHub discovery). You can mix them: “use normal web search and also check HN + Reddit.”
+4. **Optional plan-first gate** — with the confirm rule installed, the agent does **not** fire searches immediately. It proposes which sources to use, how to structure each request, and waits for your OK (same idea as the original x/Exa/Parallel gate, now across every tool).
+
 ## Optional: confirm-before-search gate
 
-These tools spend API credits, and their settings change cost and latency. If you'd rather have the agent propose a plan and wait for your OK before searching:
+Settings change cost, latency, and which corner of the internet you hit. If you'd rather approve the plan first:
 
 ```bash
 ./install.sh all --with-gate
+# or just the rule, for tools already installed:
+./install.sh hackernews reddit github producthunt arxiv feed --with-confirm-rule
 ```
 
-That installs a recommend-first rule for the tools you selected and sets `tools.approval.<tool>: allow` in `~/.omp/agent/config.yml`. Set the policy to `prompt` if you want a hard approval dialog before every call instead. More in the per-tool docs.
+That installs a recommend-first agent rule (`rules/omp-search-confirm.md`) covering built-in `web_search` **and** every extended tool you selected, plus the extra X-detail rule when `x` is included. It can also set `tools.approval.<tool>: allow` in `~/.omp/agent/config.yml` (use `prompt` instead if you want a hard dialog before every call). Say “just search” anytime to skip the gate for one request.
 
 ## Docs
 
