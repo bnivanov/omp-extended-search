@@ -88,6 +88,13 @@ That installs a recommend-first **agent rule** (`rules/omp-search-confirm.md`) c
 - [docs/exa.md](docs/exa.md) — exa_search settings: types, contents packing, categories, filters, answer, contents
 - [docs/parallel.md](docs/parallel.md) — parallel_search settings: modes, extract, task processors
 
+### Agent rules (plan-first gate)
+
+- [rules/omp-search-confirm.md](rules/omp-search-confirm.md) — omnibus rule: propose source mix + settings across `web_search` and every extended tool, wait for chat OK
+- [rules/x-search-confirm.md](rules/x-search-confirm.md) — extra X heuristics (focus / effort / capture); installed with `x`
+
+Install into omp with `./install.sh … --with-confirm-rule` (copies them to `~/.omp/agent/rules/`), or copy the files there yourself.
+
 ## Notes
 
 - `x_search` used to live at [omp-x-search](https://github.com/bnivanov/omp-x-search). That repo is archived; this one is its home now.
