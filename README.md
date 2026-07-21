@@ -70,7 +70,7 @@ That installs a recommend-first rule for the tools you selected and sets `tools.
 - [docs/hackernews.md](docs/hackernews.md) — HN search + feed parameters
 - [docs/feed.md](docs/feed.md) — feed bundles, filters, and how to build Substack/Medium/Google News feed URLs
 - [docs/arxiv.md](docs/arxiv.md) — arXiv search parameters
-- [docs/reddit.md](docs/reddit.md) — Reddit app setup (one-time) and search parameters
+- [docs/reddit.md](docs/reddit.md) — Arctic Shift archive (no Reddit app) and search parameters
 - [docs/github.md](docs/github.md) — repo search qualifiers
 - [docs/producthunt.md](docs/producthunt.md) — token setup and parameters
 - [docs/x.md](docs/x.md) — x_search settings: focus, reasoning effort, date windows, handle filters, post capture

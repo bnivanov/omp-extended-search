@@ -35,7 +35,7 @@ Tools (pick one or more):
   arxiv        arxiv_search.ts       — arXiv paper search (no key)
   reddit       reddit_search.ts      — Reddit via Arctic Shift archive (no key)
   github       github_search.ts      — GitHub repo search, trending/new projects
-  producthunt  producthunt_search.ts — Product Hunt launches (free API token)
+  producthunt  producthunt_search.ts — Product Hunt launches (Developer Token, not API Key)
   all          all of the above
 
 Extras (opt-in, applied to selected tools):
