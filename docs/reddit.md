@@ -48,3 +48,5 @@ subreddits=["LocalLLaMA"], sort="new", limit=15
 - NSFW posts are dropped.
 - If a subreddit times out, the others still return — failures are listed at the bottom.
 - Optional: `REDDIT_USER_AGENT` overrides the default User-Agent string.
+- **Rate limits:** Arctic Shift returns `Too many complex queries. Please slow down.` under parallel multi-sub load. Prefer 1–3 subs per call, serialize batches, and simplify the query (drop heavy OR chains). Retry after a short pause.
+- Invoke via omp xdev: `read` / `write` `xd://reddit_search` (not `xdi://`).

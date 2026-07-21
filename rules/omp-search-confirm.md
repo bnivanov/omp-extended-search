@@ -12,6 +12,17 @@ That includes: built-in `web_search`, and any installed extended tool (`exa_sear
 
 Instead, use **this session's main model** (you) to propose a plan first, then wait.
 
+## Invocation (after approval)
+
+Extended tools mount on omp's **`xd://` device bus** (discoverable custom tools).
+They are **not** top-level function calls and there is **no `xdi://` scheme**.
+
+- Schema: `read` `xd://hackernews_search` (etc.)
+- Run: `write` JSON args to the same `xd://<tool_name>` path; the write result is the output
+- Wrong prefix (`xdi://`, bare path, inventing a filename) creates a workspace file and does **not** run the tool
+
+Built-in `web_search` may be native or `xd://web_search` depending on omp version — use what the session exposes. When the plan is approved, call tools with the agreed settings via that path.
+
 ## 1. Restate the goal
 
 One short sentence: what answer is needed and any constraints (recency, sources, depth, budget).

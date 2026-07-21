@@ -26,3 +26,6 @@ Searches Hacker News and fetches its front-page feeds. Free, keyless — no cred
 - Every result includes the HN item link (`news.ycombinator.com/item?id=…`) plus the external link when there is one.
 - Comment hits include the story title they belong to and a text snippet.
 - Rate limits are generous; no key means nothing to configure.
+- **Product / brand queries:** prefer `tags: ["story"]` and quoted names (`"Google Stitch"`, `"Claude Design"`). Bare tokens like `Google` or unquoted multi-OR blobs match huge comment noise.
+- **Front page right now:** `operation: "feed"`, `feed: "top"` — not a keyword search.
+- Invoke via omp xdev: `read` / `write` `xd://hackernews_search` (not `xdi://`).

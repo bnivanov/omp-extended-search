@@ -42,7 +42,9 @@ For a project-level install, copy the file into `<your-project>/.omp/tools/` ins
 
 ## Usage
 
-Just ask in chat — the model picks the tool from your wording:
+### In chat (humans)
+
+Just ask — the model should pick the tool from your wording:
 
 - "What's on the front page of Hacker News right now?"
 - "Check the ai-labs feeds for anything about agents this week"
@@ -55,12 +57,51 @@ Just ask in chat — the model picks the tool from your wording:
 - "Use parallel for search: compare agent memory backends"
 - "Use your normal web search and expand with Exa and Parallel"
 
+### How the agent must invoke them (omp xdev)
+
+These install as **discoverable** custom tools. In current omp they mount on the
+**`xd://` virtual device bus** — they are **not** top-level function-call tools
+like built-in `web_search`, and there is **no `xdi://` scheme**.
+
+Canonical agent flow after install + session restart:
+
+1. **Discover / schema:** `read` `xd://hackernews_search` (or whichever tool).
+2. **Execute:** `write` a JSON args object to the same path, e.g.
+   `xd://hackernews_search` with body `{"query":"omp","operation":"search","limit":10}`.
+3. The write result **is** the tool output. Do not expect a separate side channel.
+
+```text
+# schema
+read  xd://hackernews_search
+
+# run
+write xd://hackernews_search
+{"operation":"feed","feed":"top","count":10}
+
+# other tools — same pattern
+write xd://reddit_search
+{"query":"omp","subreddits":["LocalLLaMA"],"sort":"top","time":"week","limit":10}
+
+write xd://x_search
+{"query":"omp agent","focus":"relevance","recency":"week","limit":10}
+```
+
+**Common failure mode:** writing to `xdi://…` or a bare filename creates a
+normal file/directory in the workspace and **never runs the tool**. Always use
+the exact prefix **`xd://`** plus the tool name (`hackernews_search`,
+`x_search`, …).
+
+Built-in `web_search` may still appear as a native tool *or* as `xd://web_search`
+depending on omp version — prefer whatever the session already exposes; do not
+invent a third URI.
+
 ## How it works with omp
 
 1. **Install** the tool files into `~/.omp/agent/tools/` (or a project `.omp/tools/`).
-2. **Restart omp** — it picks up new tool files automatically. Ask in plain language; the model chooses the right tool.
+2. **Restart omp** — it picks up new tool files and mounts them under `xd://<name>`.
+   Sanity check: `read xd://hackernews_search` (or another installed tool) returns a schema.
 3. **Built-in `web_search` stays the default** for everyday lookups. These tools add lanes omp covers poorly or not at all (X, HN, Reddit, PH, arXiv, feeds, full Exa/Parallel, GitHub discovery). You can mix them: “use normal web search and also check HN + Reddit.”
-4. **Optional plan-first gate** — with the global confirm rule installed, the agent does **not** fire searches immediately. It proposes which sources to use, how to structure each request, and waits for your OK — one rule over web_search and every extended tool (including X).
+4. **Optional plan-first gate** — with the global confirm rule installed, the agent does **not** fire searches immediately. It proposes which sources to use, how to structure each request, and waits for your OK — one rule over web_search and every extended tool (including X). After approval, it invokes via `write` to `xd://…` as above.
 
 ## Optional: confirm-before-search gate
 
