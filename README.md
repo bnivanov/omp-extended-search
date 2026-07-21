@@ -9,7 +9,7 @@ Install only the ones you want.
 | Hacker News | `tools/hackernews_search.ts` | Full-text search over HN stories and comments (Algolia), plus the current top/new/best/ask/show/job feeds (official API). | none |
 | Feeds | `tools/feed_search.ts` | RSS/Atom reader for news, blogs, and newsletters (Substack, Medium, lab blogs). Preset bundles for AI labs and tech news, or any feed URL. | none |
 | arXiv | `tools/arxiv_search.ts` | Searches arXiv papers by text, category (cs.AI, cs.LG, cs.CL, …), author, and date. | none |
-| Reddit | `tools/reddit_search.ts` | Subreddit-scoped search with sort/time filters and optional top comments, via the official API. | `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` (free script app, see [docs/reddit.md](docs/reddit.md)) |
+| Reddit | `tools/reddit_search.ts` | Search posts in named subreddits (default tech/AI bundle) via Arctic Shift, a third-party Reddit archive. No Reddit app approval. | none |
 | GitHub | `tools/github_search.ts` | Repository search by keyword, creation window, stars, language, topic — the proxy for "trending" (which has no API). | none needed; `GITHUB_TOKEN` or `gh auth` raises the rate limit |
 | Product Hunt | `tools/producthunt_search.ts` | Recent/top launches by topic and date (the v2 API has no keyword search — it lists, it doesn't grep). | `PRODUCTHUNT_API_TOKEN` (Developer Token from the free app page — not the API Key) |
 | X Search | `tools/x_search.ts` | Searches public posts on X (Twitter) via xAI's native search. Keyword, semantic, user, and thread search; can optionally resolve each cited post to its real text and engagement numbers. | `/login` → xAI Grok (SuperGrok or X Premium+), or `XAI_API_KEY` |

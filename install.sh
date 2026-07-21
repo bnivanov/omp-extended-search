@@ -33,7 +33,7 @@ Tools (pick one or more):
   hackernews   hackernews_search.ts  — Hacker News search + front-page feeds (no key)
   feed         feed_search.ts        — RSS/Atom reader for blogs/newsletters/news (no key)
   arxiv        arxiv_search.ts       — arXiv paper search (no key)
-  reddit       reddit_search.ts      — Reddit search via the official API (free app creds)
+  reddit       reddit_search.ts      — Reddit via Arctic Shift archive (no key)
   github       github_search.ts      — GitHub repo search, trending/new projects
   producthunt  producthunt_search.ts — Product Hunt launches (free API token)
   all          all of the above
@@ -179,7 +179,7 @@ wants parallel    && echo "       Parallel:     /login → Parallel  or  export 
 wants hackernews  && echo "       Hacker News:  none needed"
 wants feed        && echo "       Feeds:        none needed"
 wants arxiv       && echo "       arXiv:        none needed"
-wants reddit      && echo "       Reddit:       script app at reddit.com/prefs/apps → export REDDIT_CLIENT_ID=... REDDIT_CLIENT_SECRET=..."
+wants reddit      && echo "       Reddit:       none needed (Arctic Shift archive; not the official API)"
 wants github      && echo "       GitHub:       works without auth (low rate limit); export GITHUB_TOKEN=... or gh auth login for more"
 wants producthunt && echo "       Product Hunt: app at producthunt.com/v2/oauth/applications → export PRODUCTHUNT_API_TOKEN=<Developer Token, not API Key>"
 echo "  2. Restart any open omp session so the new tools are discovered."
