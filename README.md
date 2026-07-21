@@ -64,15 +64,17 @@ Just ask in chat — the model picks the tool from your wording:
 
 ## Optional: confirm-before-search gate
 
-Settings change cost, latency, and which corner of the internet you hit. If you'd rather approve the plan first:
+Settings change cost, latency, and which corner of the internet you hit. If you'd rather shape the research in chat first:
 
 ```bash
+./install.sh all --with-confirm-rule
+# shorthand that also writes tools.approval.<tool>: allow (harmless under yolo):
 ./install.sh all --with-gate
-# or just the rule, for tools already installed:
-./install.sh hackernews reddit github producthunt arxiv feed --with-confirm-rule
 ```
 
-That installs a recommend-first agent rule (`rules/omp-search-confirm.md`) covering built-in `web_search` **and** every extended tool you selected, plus the extra X-detail rule when `x` is included. It can also set `tools.approval.<tool>: allow` in `~/.omp/agent/config.yml` (use `prompt` instead if you want a hard dialog before every call). Say “just search” anytime to skip the gate for one request.
+That installs a recommend-first **agent rule** (`rules/omp-search-confirm.md`) covering built-in `web_search` and every extended tool, plus the extra X-detail rule when `x` is included.
+
+**Intended UX:** the model proposes sources + parameters in the chat and waits for your “go” / tweaks. It is **not** a per-call “Approve x_search?” popup. Keep `tools.approvalMode: yolo` (omp default for many setups) or per-tool `allow` so tools run quietly after you approve the plan in chat. Only set a tool to `prompt` if you *want* a hard UI dialog every call. Say “just search” anytime to skip the chat gate for one request.
 
 ## Docs
 

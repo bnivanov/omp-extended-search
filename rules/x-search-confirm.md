@@ -19,7 +19,7 @@ When the user asks for anything that should run through the `x_search` tool (X/T
    - `allowed_handles`/`excluded_handles` — pin handles when the user named specific accounts.
    - `capture` — enable when the user wants the real post text/engagement, not just Grok's summary. Use `syndication` (free) by default; only use `capture_provider: firecrawl` when the user explicitly wants retweet counts / top replies and accepts Firecrawl credit spend.
    - `model` — leave at the default unless the user wants premium synthesis (`grok-4.5`).
-3. **Ask the user to approve or adjust.** If they change parameters, restate the final plan.
-4. **Only then call `x_search`.** The tool is also configured to show an approval prompt with the resolved settings; approving there runs the search, rejecting it means revise and re-propose.
+3. **Ask the user to approve or adjust in chat.** If they change parameters, restate the final plan.
+4. **Only then call `x_search`.** No separate UI popup — once they say go (or tweak), run with the agreed settings.
 
 Keep the proposal terse — a goal line plus the settings bullets. Do not pad it with caveats the user already knows.
