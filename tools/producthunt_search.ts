@@ -6,7 +6,8 @@
  * on the v2 API — results are filtered by topic slug and/or postedAfter date,
  * then ordered by votes or newest.
  *
- * Requires PRODUCTHUNT_API_TOKEN (developer token from a PH v2 OAuth app).
+ * Requires PRODUCTHUNT_API_TOKEN (the Developer Token from a PH v2 OAuth app —
+ * not the API Key / API Secret pair on that same page).
  */
 
 const GRAPHQL_URL = "https://api.producthunt.com/v2/api/graphql";
@@ -86,11 +87,11 @@ function mapApiError(body, status) {
 	for (const e of errors) {
 		const code = e?.error || e?.extensions?.code || e?.code;
 		if (code === "invalid_oauth_token" || /invalid.?oauth.?token/i.test(String(e?.error_description || e?.message || ""))) {
-			return "Error: invalid Product Hunt API token. Check PRODUCTHUNT_API_TOKEN — create an app at https://www.producthunt.com/v2/oauth/applications and use its API key/developer token.";
+			return "Error: invalid Product Hunt token. PRODUCTHUNT_API_TOKEN must be the Developer Token from https://www.producthunt.com/v2/oauth/applications — not the API Key.";
 		}
 	}
 	if (status === 401 || status === 403) {
-		return "Error: invalid Product Hunt API token. Check PRODUCTHUNT_API_TOKEN — create an app at https://www.producthunt.com/v2/oauth/applications and use its API key/developer token.";
+		return "Error: invalid Product Hunt token. PRODUCTHUNT_API_TOKEN must be the Developer Token from https://www.producthunt.com/v2/oauth/applications — not the API Key.";
 	}
 	if (errors.length) {
 		const parts = errors.map((e) => e?.message || e?.error_description || e?.error || JSON.stringify(e));
@@ -178,7 +179,7 @@ const factory = (host) => {
 						content: [
 							{
 								type: "text",
-								text: "Error: PRODUCTHUNT_API_TOKEN is not set. Create an app at https://www.producthunt.com/v2/oauth/applications and use its API key/developer token.",
+								text: "Error: PRODUCTHUNT_API_TOKEN is not set. Create an app at https://www.producthunt.com/v2/oauth/applications, then use the Developer Token (not the API Key). export PRODUCTHUNT_API_TOKEN=...",
 							},
 						],
 					};
