@@ -4,7 +4,9 @@
 #
 #   ./install.sh x                  install x_search only
 #   ./install.sh exa parallel       install exa_search + parallel_search
+#
 #   ./install.sh hackernews feed    install the free, no-key tools
+#   ./install.sh firecrawl          install firecrawl_search only
 #   ./install.sh all                install every tool
 #
 # Opt-in extras (applied to the selected tools only):
@@ -36,6 +38,7 @@ Tools (pick one or more):
   reddit       reddit_search.ts      — Reddit via Arctic Shift archive (no key)
   github       github_search.ts      — GitHub repo search, trending/new projects
   producthunt  producthunt_search.ts — Product Hunt launches (Developer Token, not API Key)
+  firecrawl    firecrawl_search.ts   — advanced direct Firecrawl search (keyless limited mode; optional FIRECRAWL_API_KEY for higher limits)
   all          all of the above
 
 Extras (opt-in, applied to selected tools):
@@ -49,8 +52,8 @@ EOF
 
 for arg in "$@"; do
   case "$arg" in
-    x|exa|parallel|hackernews|feed|arxiv|reddit|github|producthunt) SELECTED+=("$arg") ;;
-    all) SELECTED=(x exa parallel hackernews feed arxiv reddit github producthunt) ;;
+    x|exa|parallel|hackernews|feed|arxiv|reddit|github|producthunt|firecrawl) SELECTED+=("$arg") ;;
+    all) SELECTED=(x exa parallel hackernews feed arxiv reddit github producthunt firecrawl) ;;
     --with-confirm-rule) WITH_CONFIRM_RULE=1 ;;
     --with-approval-gate) WITH_APPROVAL_GATE=1 ;;
     --with-gate)
@@ -176,6 +179,7 @@ echo "  1. Credentials for the tools you installed:"
 wants x           && echo "       X:            /login → xAI Grok (SuperGrok or X Premium+)  or  export XAI_API_KEY=..."
 wants exa         && echo "       Exa:          /login → Exa  or  export EXA_API_KEY=..."
 wants parallel    && echo "       Parallel:     /login → Parallel  or  export PARALLEL_API_KEY=..."
+wants firecrawl  && echo "       Firecrawl:    keyless limited mode; export FIRECRAWL_API_KEY=... for higher limits"
 wants hackernews  && echo "       Hacker News:  none needed"
 wants feed        && echo "       Feeds:        none needed"
 wants arxiv       && echo "       arXiv:        none needed"
@@ -183,12 +187,13 @@ wants reddit      && echo "       Reddit:       none needed (Arctic Shift archiv
 wants github      && echo "       GitHub:       works without auth (low rate limit); export GITHUB_TOKEN=... or gh auth login for more"
 wants producthunt && echo "       Product Hunt: app at producthunt.com/v2/oauth/applications → export PRODUCTHUNT_API_TOKEN=<Developer Token, not API Key>"
 echo "  2. Restart any open omp session so the new tools are discovered under xd://."
-echo "     Sanity check: read xd://<tool>_search  (e.g. xd://hackernews_search) → schema."
+echo "     Sanity check: read xd://<tool>_search (e.g. xd://hackernews_search or xd://firecrawl_search) → schema."
 echo "     Invoke:       write JSON args to that same xd:// path (NOT xdi://, NOT a bare file)."
 echo "  3. Ask in chat, e.g.:"
 wants x           && echo "       \"what's being said on X about ...\""
 wants exa         && echo "       \"use exa for search: ...\""
 wants parallel    && echo "       \"use parallel for search: ...\""
+wants firecrawl  && echo "       \"use firecrawl for advanced direct search: ...\""
 wants hackernews  && echo "       \"search hacker news for ...\" / \"what's on the front page of HN?\""
 wants feed        && echo "       \"check the ai-labs feeds for ...\""
 wants arxiv       && echo "       \"find recent arxiv papers on ...\""
@@ -203,4 +208,4 @@ if [[ "$WITH_CONFIRM_RULE" -eq 0 && "$WITH_APPROVAL_GATE" -eq 0 ]]; then
 fi
 echo
 echo "Docs: docs/x.md, docs/exa.md, docs/parallel.md, docs/hackernews.md, docs/feed.md,"
-echo "      docs/arxiv.md, docs/reddit.md, docs/github.md, docs/producthunt.md"
+echo "      docs/arxiv.md, docs/reddit.md, docs/github.md, docs/producthunt.md, docs/firecrawl.md"
