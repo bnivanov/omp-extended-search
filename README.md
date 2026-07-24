@@ -1,6 +1,6 @@
 # omp-extended-search
 
-Extra search tools for the [omp](https://omp.sh) coding agent. omp's built-in `web_search` covers everyday lookups; these tools add backends it exposes poorly or not at all. Each tool is one self-contained TypeScript file — no build step, no dependencies, survives omp upgrades.
+Extra search tools for the [omp](https://omp.sh) coding agent. omp's built-in `web_search` covers everyday lookups; these tools add backends or advanced controls it exposes poorly or not at all. Each tool is one self-contained TypeScript file — no build step, no dependencies, survives omp upgrades.
 
 Install only the ones you want.
 
@@ -14,6 +14,7 @@ Install only the ones you want.
 | Product Hunt | `tools/producthunt_search.ts` | Recent/top launches by topic and date (the v2 API has no keyword search — it lists, it doesn't grep). | `PRODUCTHUNT_API_TOKEN` (Developer Token from the free app page — not the API Key) |
 | X Search | `tools/x_search.ts` | Searches public posts on X (Twitter) via xAI's native search. Keyword, semantic, user, and thread search; can optionally resolve each cited post to its real text and engagement numbers. | `/login` → xAI Grok (SuperGrok or X Premium+), or `XAI_API_KEY` |
 | Exa Search | `tools/exa_search.ts` | Full Exa API: search types (`auto` / `fast` / `neural` / `deep`), vertical categories (papers, people, companies, github), domain/date filters, answer-with-citations, URL contents fetch. omp's native Exa path only ever uses `auto` + summary. | `/login` → Exa, or `EXA_API_KEY` |
+| Firecrawl Search | `tools/firecrawl_search.ts` | Direct Firecrawl Search API with web/news/images sources, GitHub/research/PDF categories, domain/date/location filters, highlights, optional page scraping, and raw response metadata. omp 17.0.9+ can use Firecrawl behind ordinary `web_search` when Firecrawl is explicitly selected in `providers.webSearchOrder`; this extension is the advanced/direct lane. | Credential order: omp session/provider Firecrawl credential first; `FIRECRAWL_API_KEY` second; keyless access last (limited). Either credential provides higher limits. |
 | Parallel Search | `tools/parallel_search.ts` | Full Parallel V1 API: search modes (`turbo` / `basic` / `advanced`) with objective + multi-query support, URL extract, and deep-research task processors (`lite` … `ultra8x`). omp's native path hardcodes the old beta `fast` mode. | `/login` → Parallel, or `PARALLEL_API_KEY` |
 
 ## Install
@@ -25,6 +26,7 @@ cd omp-extended-search
 ./install.sh hackernews feed arxiv   # the free, no-key tools
 ./install.sh x                      # just X search
 ./install.sh exa parallel           # just Exa and Parallel
+./install.sh firecrawl              # advanced/direct Firecrawl controls
 ./install.sh reddit                 # just Reddit
 ./install.sh all                    # everything
 ./install.sh                        # prints help, installs nothing
@@ -54,6 +56,7 @@ Just ask — the model should pick the tool from your wording:
 - "What launched on Product Hunt this week?"
 - "What's being said on X about the latest omp release?"
 - "Use exa for search: recent papers on agent memory"
+- "Use Firecrawl news search for this week and return highlights"
 - "Use parallel for search: compare agent memory backends"
 - "Use your normal web search and expand with Exa and Parallel"
 
@@ -84,23 +87,32 @@ write xd://reddit_search
 
 write xd://x_search
 {"query":"omp agent","focus":"relevance","recency":"week","limit":10}
+
+write xd://firecrawl_search
+{"query":"agent memory","sources":["news"],"recency":"week","limit":5}
 ```
 
 **Common failure mode:** writing to `xdi://…` or a bare filename creates a
 normal file/directory in the workspace and **never runs the tool**. Always use
 the exact prefix **`xd://`** plus the tool name (`hackernews_search`,
-`x_search`, …).
+`firecrawl_search`, `x_search`, …).
 
 Built-in `web_search` may still appear as a native tool *or* as `xd://web_search`
 depending on omp version — prefer whatever the session already exposes; do not
-invent a third URI.
+invent a third URI. Since omp 17.0.9, that built-in lane can use Firecrawl,
+including limited keyless access, **only when Firecrawl is explicitly selected
+in `providers.webSearchOrder`**. The automatic provider chain remains
+credential-gated, and this installer does not set provider order. Keep built-in
+`web_search` as the everyday default; invoke `xd://firecrawl_search` only when
+you need Firecrawl-specific sources, categories, filters, scrape controls, or
+raw Firecrawl metadata.
 
 ## How it works with omp
 
 1. **Install** the tool files into `~/.omp/agent/tools/` (or a project `.omp/tools/`).
 2. **Restart omp** — it picks up new tool files and mounts them under `xd://<name>`.
    Sanity check: `read xd://hackernews_search` (or another installed tool) returns a schema.
-3. **Built-in `web_search` stays the default** for everyday lookups. These tools add lanes omp covers poorly or not at all (X, HN, Reddit, PH, arXiv, feeds, full Exa/Parallel, GitHub discovery). You can mix them: “use normal web search and also check HN + Reddit.”
+3. **Built-in `web_search` stays the default** for everyday lookups. omp 17.0.9+ can back it with Firecrawl when explicitly configured in `providers.webSearchOrder`; this installer leaves that order unchanged. These tools add lanes or controls omp covers poorly or not at all (X, HN, Reddit, PH, arXiv, feeds, advanced/direct Firecrawl, full Exa/Parallel, GitHub discovery). You can mix them: “use normal web search and also check HN + Reddit.”
 4. **Optional plan-first gate** — with the global confirm rule installed, the agent does **not** fire searches immediately. It proposes which sources to use, how to structure each request, and waits for your OK — one rule over web_search and every extended tool (including X). After approval, it invokes via `write` to `xd://…` as above.
 
 ## Optional: confirm-before-search gate
@@ -113,7 +125,7 @@ Settings change cost, latency, and which corner of the internet you hit. If you'
 ./install.sh all --with-gate
 ```
 
-That installs one global recommend-first **agent rule** ([rules/omp-search-confirm.md](rules/omp-search-confirm.md)) covering built-in `web_search` and every extended tool (HN, Reddit, PH, GitHub, arXiv, feeds, X, Exa, Parallel).
+That installs one global recommend-first **agent rule** ([rules/omp-search-confirm.md](rules/omp-search-confirm.md)) covering built-in `web_search` and every extended tool (HN, Reddit, PH, GitHub, arXiv, feeds, X, Firecrawl, Exa, Parallel).
 
 **Intended UX:** the model proposes sources + parameters in the chat and waits for your “go” / tweaks. It is **not** a per-call “Approve x_search?” popup. Keep `tools.approvalMode: yolo` (omp default for many setups) or per-tool `allow` so tools run quietly after you approve the plan in chat. Only set a tool to `prompt` if you *want* a hard UI dialog every call. Say “just search” anytime to skip the chat gate for one request.
 
@@ -127,6 +139,7 @@ That installs one global recommend-first **agent rule** ([rules/omp-search-confi
 - [docs/producthunt.md](docs/producthunt.md) — token setup and parameters
 - [docs/x.md](docs/x.md) — x_search settings: focus, reasoning effort, date windows, handle filters, post capture
 - [docs/exa.md](docs/exa.md) — exa_search settings: types, contents packing, categories, filters, answer, contents
+- [docs/firecrawl.md](docs/firecrawl.md) — firecrawl_search sources, categories, filters, highlights, optional scraping, costs, and raw response shape
 - [docs/parallel.md](docs/parallel.md) — parallel_search settings: modes, extract, task processors
 
 ### Agent rule (plan-first gate)
@@ -138,5 +151,5 @@ Install into omp with `./install.sh … --with-confirm-rule` (copies it to `~/.o
 ## Notes
 
 - `x_search` used to live at [omp-x-search](https://github.com/bnivanov/omp-x-search). That repo is archived; this one is its home now.
-- Auth resolution in every tool: omp session credentials first, environment variables as fallback.
+- `firecrawl_search` resolves credentials in this order: omp session/provider Firecrawl credential, `FIRECRAWL_API_KEY`, then limited keyless access.
 - License: [MIT](./LICENSE)

@@ -8,7 +8,7 @@ alwaysApply: true
 
 When the user asks for something that needs **live outside research** — web facts, news, social chatter, papers, launches, repos, feeds, comparisons, multi-source synthesis — **do not call** research tools immediately.
 
-That includes: built-in `web_search`, and any installed extended tool (`exa_search`, `parallel_search`, `x_search`, `hackernews_search`, `reddit_search`, `producthunt_search`, `github_search`, `arxiv_search`, `feed_search`).
+That includes: built-in `web_search`, and any installed extended tool (`firecrawl_search`, `exa_search`, `parallel_search`, `x_search`, `hackernews_search`, `reddit_search`, `producthunt_search`, `github_search`, `arxiv_search`, `feed_search`).
 
 Instead, use **this session's main model** (you) to propose a plan first, then wait.
 
@@ -21,7 +21,7 @@ They are **not** top-level function calls and there is **no `xdi://` scheme**.
 - Run: `write` JSON args to the same `xd://<tool_name>` path; the write result is the output
 - Wrong prefix (`xdi://`, bare path, inventing a filename) creates a workspace file and does **not** run the tool
 
-Built-in `web_search` may be native or `xd://web_search` depending on omp version — use what the session exposes. When the plan is approved, call tools with the agreed settings via that path.
+Built-in `web_search` may be native or `xd://web_search` depending on omp version — use what the session exposes. omp 17.0.9+ can use Firecrawl, including limited keyless access, behind that ordinary lane **only when Firecrawl is explicitly selected in `providers.webSearchOrder`**. The automatic provider chain remains credential-gated, and this installer does not set provider order. This does not make `firecrawl_search` the default. When the plan is approved, call tools with the agreed settings via the exposed path.
 
 ## 1. Restate the goal
 
@@ -34,6 +34,7 @@ Pick **one** primary path, or an explicit combination. Prefer the cheapest path 
 | Need | Prefer | Why |
 |---|---|---|
 | Quick fact / docs / obvious query | **`web_search` alone** | Fast, already configured; no extra spend |
+| Firecrawl-specific web/news/images sources, GitHub/research/PDF categories, domain/date/location filters, optional page scrape, or raw Firecrawl metadata | **`firecrawl_search`** | Direct access to advanced Firecrawl controls the native lane does not expose |
 | Semantic “pages like this”, verticals (papers/people/companies/github), multi-angle SERP | **`exa_search`** | Neural/deep + categories beat generic SERP |
 | Objective + multi-query with long excerpts | **`parallel_search` search** | Long excerpts for synthesis |
 | Known URLs need body text | **`exa_search` contents** or **`parallel_search` extract** | Dedicated fetch |
@@ -55,6 +56,16 @@ For each tool you plan to call, list the resolved settings and a **one-clause re
 
 ### If using `web_search`
 - note provider preference if known; otherwise “session default”
+
+### If using `firecrawl_search`
+- Use only for Firecrawl-specific sources/categories/filters/scrape controls or raw provider metadata; ordinary lookups stay on built-in `web_search`. omp 17.0.9+ uses Firecrawl underneath only when configured in `providers.webSearchOrder`
+- `query` (required), `limit` (default `10`, range 1–100 **per source**), `sources` (`web` default; optional `news`/`images`), and optional `categories` (`github`/`research`/`pdf`)
+- Filters when useful: mutually exclusive `include_domains`/`exclude_domains`; `recency` (`hour`/`day`/`week`/`month`/`year`) or raw Firecrawl `tbs`; `location` and `country`
+- `highlights` defaults `true` for focused web descriptions/news snippets; `content` defaults `none` (no full-page scrape), or request `markdown`/`summary`/`links`
+- Scrape controls only when `content` is not `none`: `only_main_content`, `max_age_ms`, `scrape_timeout_ms`; `ignore_invalid_urls` is a top-level search option
+- `timeout_ms` defaults to `60000`. There is no pagination; choose one bounded request
+- Authentication resolves omp's stored Firecrawl/provider session credential first, then `FIRECRAWL_API_KEY`, then limited keyless mode; either authenticated source raises limits. Warn that multi-source `limit` applies independently to each source, search credits round up per source, and optional per-result scraping adds credits and latency
+- Expect grouped `web`/`news`/`images` data plus optional `warning`, `id`, and `creditsUsed`; retain partial item errors rather than treating one scrape failure as total failure
 
 ### If using `exa_search`
 - `operation`: `search` | `answer` | `contents`
@@ -107,6 +118,7 @@ For each tool you plan to call, list the resolved settings and a **one-clause re
 ### Cost / latency snapshot
 Order-of-magnitude is fine:
 - web_search / HN / reddit / github / arxiv / feeds / Product Hunt: free or already-provisioned / seconds
+- firecrawl_search: keyless is limited; search costs credits per source, and optional full-page scraping adds per-result credits + latency
 - exa auto+summary: ~$0.01 / few seconds; deep higher
 - parallel turbo/basic/advanced: ~$0.001–0.005 / sub-second–few seconds
 - parallel task lite/base/core: cents–tens of cents / tens of seconds+
