@@ -45,13 +45,21 @@ const BUNDLES: Record<string, { name: string; url: string }[]> = {
 	],
 };
 
+type FeedEnclosure = {
+	url: string;
+	type?: string;
+	length?: string;
+};
+
 type FeedItem = {
 	title: string;
 	link: string;
 	date: Date | null;
 	dateStr: string;
 	summary: string;
+	enclosures: FeedEnclosure[];
 };
+
 
 type FeedResult = {
 	url: string;
@@ -59,6 +67,71 @@ type FeedResult = {
 	items: FeedItem[];
 	error?: string;
 };
+
+const RETRY_MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 8000;
+// Unbilled GET: 500 stays retryable (server may not have completed).
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function asAbortError(reason, fallbackMessage) {
+	if (reason && typeof reason === "object" && (reason.name === "AbortError" || reason.name === "TimeoutError")) return reason;
+	const error = new Error(reason instanceof Error ? reason.message : (fallbackMessage || "aborted"));
+	error.name = "AbortError";
+	if (reason !== undefined) error.cause = reason;
+	return error;
+}
+
+function retryDelayMs(attempt, retryAfterHeader) {
+	const raw = typeof retryAfterHeader === "string" ? retryAfterHeader.trim() : "";
+	if (raw) {
+		const seconds = Number.parseFloat(raw);
+		if (Number.isFinite(seconds) && seconds >= 0) return { delayMs: seconds * 1000, fromHeader: true };
+		const at = Date.parse(raw);
+		if (Number.isFinite(at)) return { delayMs: Math.max(at - Date.now(), 0), fromHeader: true };
+	}
+	const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+	return { delayMs: Math.round(backoff * (0.5 + Math.random() * 0.5)), fromHeader: false };
+}
+
+function sleepWithAbort(ms, signal) {
+	const { promise, resolve, reject } = Promise.withResolvers();
+	if (signal?.aborted) {
+		reject(asAbortError(signal.reason, "aborted"));
+		return promise;
+	}
+	const timer = setTimeout(() => {
+		signal?.removeEventListener?.("abort", onAbort);
+		resolve(undefined);
+	}, ms);
+	const onAbort = () => {
+		clearTimeout(timer);
+		reject(asAbortError(signal?.reason, "aborted"));
+	};
+	signal?.addEventListener?.("abort", onAbort, { once: true });
+	return promise;
+}
+
+async function waitBeforeRetry(delayInfo, ctrl, deadlineAt, lastFailureMessage) {
+	const remaining = deadlineAt - Date.now();
+	const delayMs = delayInfo.delayMs;
+	if (delayInfo.fromHeader) {
+		if (delayMs > remaining) {
+			const askedSec = Math.ceil(delayMs / 1000);
+			const leftSec = Math.max(0, Math.ceil(remaining / 1000));
+			throw new Error(
+				`${lastFailureMessage || "request failed"}: server asked for ${askedSec}s but only ${leftSec}s of the request budget remains; not retried.`,
+			);
+		}
+		await sleepWithAbort(delayMs, ctrl.signal);
+		return;
+	}
+	if (remaining <= 0) {
+		throw new Error(`${lastFailureMessage || "request failed"} (request budget exhausted)`);
+	}
+	await sleepWithAbort(Math.min(delayMs, remaining), ctrl.signal);
+}
+
 
 function clampInt(value, fallback, min, max) {
 	const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
@@ -180,6 +253,45 @@ function extractBlocks(xml, tag) {
 	return out;
 }
 
+function attrFrom(attrs, name) {
+	const m = attrs.match(new RegExp(`(?:^|\\s)(?:[\\w-]+:)?${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
+	if (!m) return undefined;
+	const raw = (m[1] ?? m[2] ?? m[3] ?? "").trim();
+	if (!raw) return undefined;
+	return decodeEntities(raw);
+}
+
+function parseEnclosures(block): FeedEnclosure[] {
+	const out: FeedEnclosure[] = [];
+	const seen = new Set<string>();
+
+	// RSS <enclosure url type length />
+	const encRe = /<(?:[\w-]+:)?enclosure\b([^>]*)\/?>/gi;
+	let m;
+	while ((m = encRe.exec(block)) != null) {
+		const attrs = m[1] || "";
+		const url = attrFrom(attrs, "url");
+		if (!url || seen.has(url)) continue;
+		seen.add(url);
+		out.push({ url, type: attrFrom(attrs, "type"), length: attrFrom(attrs, "length") });
+	}
+
+	// Atom <link rel="enclosure" href type length />
+	const linkRe = /<(?:[\w-]+:)?link\b([^>]*)\/?>/gi;
+	while ((m = linkRe.exec(block)) != null) {
+		const attrs = m[1] || "";
+		const rel = (attrFrom(attrs, "rel") || "").toLowerCase();
+		if (rel !== "enclosure") continue;
+		const url = attrFrom(attrs, "href");
+		if (!url || seen.has(url)) continue;
+		seen.add(url);
+		out.push({ url, type: attrFrom(attrs, "type"), length: attrFrom(attrs, "length") });
+	}
+
+	return out;
+}
+
+
 function parseItem(block): FeedItem {
 	const title = cleanText(firstTagBody(block, ["title"])) || "(untitled)";
 	const link = extractLink(block);
@@ -199,14 +311,17 @@ function parseItem(block): FeedItem {
 	const summarySource =
 		encoded && cleanText(encoded[1]).length > cleanText(summaryRaw).length ? encoded[1] : summaryRaw;
 	const summary = truncate(cleanText(summarySource));
+	const enclosures = parseEnclosures(block);
 	return {
 		title,
 		link,
 		date,
 		dateStr: formatDate(date),
 		summary,
+		enclosures,
 	};
 }
+
 
 function feedDisplayName(xml, fallback: string) {
 	// Prefer channel/feed-level title. Strip item/entry blocks first so we don't grab an item title.
@@ -228,23 +343,60 @@ function parseFeed(xml, fallbackName: string): { name: string; items: FeedItem[]
 
 async function fetchText(url, signal, timeoutMs = FETCH_TIMEOUT_MS) {
 	const ctrl = new AbortController();
+	const deadlineAt = Date.now() + timeoutMs;
 	const timer = setTimeout(() => ctrl.abort(new DOMException("request timeout", "TimeoutError")), timeoutMs);
-	const onAbort = () => ctrl.abort();
+	const onAbort = () => ctrl.abort(asAbortError(signal?.reason, "aborted"));
 	if (signal) {
-		if (signal.aborted) ctrl.abort();
+		if (signal.aborted) ctrl.abort(asAbortError(signal.reason, "aborted"));
 		else signal.addEventListener("abort", onAbort, { once: true });
 	}
+
+	const rethrowIfAborted = (error) => {
+		if (error && (error.name === "AbortError" || error.name === "TimeoutError")) throw error;
+		if (ctrl.signal.aborted) throw asAbortError(ctrl.signal.reason, "aborted");
+	};
+
 	try {
-		const res = await fetch(url, {
-			signal: ctrl.signal,
-			headers: {
-				"User-Agent": USER_AGENT,
-				Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
-			},
-			redirect: "follow",
-		});
-		if (!res.ok) throw new Error(`HTTP ${res.status}`);
-		return await res.text();
+		let lastError;
+		let lastFailureMessage = "";
+		for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+			let res;
+			try {
+				res = await fetch(url, {
+					signal: ctrl.signal,
+					headers: {
+						"User-Agent": USER_AGENT,
+						Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+					},
+					redirect: "follow",
+				});
+			} catch (error) {
+				rethrowIfAborted(error);
+				lastError = error instanceof Error ? error : new Error(String(error));
+				lastFailureMessage = lastError.message;
+				if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+					const delay = retryDelayMs(attempt, undefined);
+					await waitBeforeRetry(delay, ctrl, deadlineAt, lastFailureMessage);
+					continue;
+				}
+				const suffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : "";
+				throw new Error(`${lastError.message}${suffix}`);
+			}
+
+			if (!res.ok) {
+				lastFailureMessage = `HTTP ${res.status}`;
+				if (RETRYABLE_STATUS.has(res.status) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+					const delay = retryDelayMs(attempt, res.headers?.get?.("retry-after"));
+					try { await res.arrayBuffer(); } catch { /* drain */ }
+					await waitBeforeRetry(delay, ctrl, deadlineAt, lastFailureMessage);
+					continue;
+				}
+				const suffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : "";
+				throw new Error(`HTTP ${res.status}${suffix}`);
+			}
+			return await res.text();
+		}
+		throw lastError ?? new Error(`Failed to fetch ${url}`);
 	} finally {
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", onAbort);
@@ -323,9 +475,20 @@ function resolveSources(params): { url: string; name: string }[] | { error: stri
 function applyFiltersAndLimits(
 	feedResults: FeedResult[],
 	opts: { queryTerms: string[]; sinceMs: number | null; perFeed: number; limit: number },
-): FeedResult[] {
+): {
+	results: FeedResult[];
+	per_feed_candidates: Record<string, number>;
+	per_feed_truncated: string[];
+	global_truncated: boolean;
+} {
+	const per_feed_candidates: Record<string, number> = {};
+	const per_feed_truncated: string[] = [];
+
 	const filtered = feedResults.map((fr) => {
-		if (fr.error) return fr;
+		if (fr.error) {
+			per_feed_candidates[fr.url] = 0;
+			return fr;
+		}
 		let items = fr.items.slice();
 		// newest first
 		items.sort((a, b) => {
@@ -339,13 +502,26 @@ function applyFiltersAndLimits(
 		if (opts.queryTerms.length) {
 			items = items.filter((it) => matchesQuery(it, opts.queryTerms));
 		}
-		items = items.slice(0, opts.perFeed);
+		// Track pre-slice candidates so per_feed truncation is visible even when
+		// the global limit would otherwise hide that a rich feed was cut short.
+		per_feed_candidates[fr.url] = items.length;
+		if (items.length > opts.perFeed) {
+			per_feed_truncated.push(fr.name || fr.url);
+			items = items.slice(0, opts.perFeed);
+		}
 		return { ...fr, items };
 	});
 
 	// Global limit: interleave by date across feeds
 	const totalItems = filtered.reduce((n, fr) => n + (fr.error ? 0 : fr.items.length), 0);
-	if (totalItems <= opts.limit) return filtered;
+	if (totalItems <= opts.limit) {
+		return {
+			results: filtered,
+			per_feed_candidates,
+			per_feed_truncated,
+			global_truncated: false,
+		};
+	}
 
 	// Build a flat list of (feedIdx, itemIdx, date) and pick top `limit` by date
 	type Ref = { fi: number; ii: number; t: number };
@@ -359,18 +535,37 @@ function applyFiltersAndLimits(
 	refs.sort((a, b) => b.t - a.t);
 	const keep = new Set(refs.slice(0, opts.limit).map((r) => `${r.fi}:${r.ii}`));
 
-	return filtered.map((fr, fi) => {
+	const results = filtered.map((fr, fi) => {
 		if (fr.error) return fr;
 		return {
 			...fr,
 			items: fr.items.filter((_, ii) => keep.has(`${fi}:${ii}`)),
 		};
 	});
+	return {
+		results,
+		per_feed_candidates,
+		per_feed_truncated,
+		global_truncated: true,
+	};
 }
 
 function formatOutput(
 	feedResults: FeedResult[],
-	meta: { query?: string; since_days?: number; sources: number },
+	meta: {
+		query?: string;
+		since_days?: number;
+		sources: number;
+		pagination?: {
+			page?: number;
+			per_page: number;
+			returned: number;
+			has_more: boolean;
+			continuation_supported?: boolean;
+			truncated?: boolean;
+			per_feed_truncated?: string[];
+		};
+	},
 ): string {
 	const okFeeds = feedResults.filter((fr) => !fr.error);
 	const itemCount = feedResults.reduce((n, fr) => n + fr.items.length, 0);
@@ -404,12 +599,43 @@ function formatOutput(
 			out.push(`[${i + 1}] ${it.title}${datePart}`);
 			if (it.link) out.push(`    ${it.link}`);
 			if (it.summary) out.push(`    ${it.summary}`);
+			if (it.enclosures?.length) {
+				const media = it.enclosures
+					.map((enc) => {
+						const bits = [enc.url];
+						if (enc.type) bits.push(enc.type);
+						if (enc.length) bits.push(enc.length);
+						return bits.join(" ");
+					})
+					.join("; ");
+				out.push(`    media: ${media}`);
+			}
 		});
 		out.push("");
 	}
 
+	if (meta.pagination) {
+		const p = meta.pagination;
+		let showing = `Showing ${p.returned} results (requested limit ${p.per_page})`;
+		const truncated =
+			p.truncated === true ||
+			(Array.isArray(p.per_feed_truncated) && p.per_feed_truncated.length > 0) ||
+			(p.has_more === true && p.continuation_supported === false);
+		if (truncated) {
+			const cut =
+				Array.isArray(p.per_feed_truncated) && p.per_feed_truncated.length > 0
+					? ` Feeds cut by per_feed_limit: ${p.per_feed_truncated.join(", ")}.`
+					: "";
+			showing += ` — the result set may be truncated; this tool has no pagination, so raise limit/per_feed_limit or narrow the query to see more.${cut}`;
+		} else {
+			showing += ".";
+		}
+		out.push(showing);
+	}
+
 	return out.join("\n").trimEnd();
 }
+
 
 const factory = (host) => {
 	const z = host.zod;
@@ -519,17 +745,40 @@ const factory = (host) => {
 					}
 				});
 
-				const feedResults = applyFiltersAndLimits(rawResults, {
+				const {
+					results: feedResults,
+					per_feed_candidates,
+					per_feed_truncated,
+					global_truncated,
+				} = applyFiltersAndLimits(rawResults, {
 					queryTerms,
 					sinceMs,
 					perFeed,
 					limit,
 				});
 
+				const returned = feedResults.reduce((n, fr) => n + fr.items.length, 0);
+				const per_feed: Record<string, number> = {};
+				for (const fr of feedResults) per_feed[fr.url] = fr.items.length;
+				// No page/cursor param — report truncation, never has_more (P).
+				const truncated = global_truncated || per_feed_truncated.length > 0;
+				const pagination = {
+					page: 1,
+					per_page: limit,
+					returned,
+					has_more: false,
+					continuation_supported: false,
+					truncated: truncated || undefined,
+					per_feed_truncated: per_feed_truncated.length > 0 ? per_feed_truncated : undefined,
+					per_feed_candidates,
+					per_feed,
+				};
+
 				const text = formatOutput(feedResults, {
 					query: queryStr || undefined,
 					since_days: sinceDays ?? undefined,
 					sources: sources.length,
+					pagination,
 				});
 
 				return {
@@ -548,9 +797,11 @@ const factory = (host) => {
 									link: it.link,
 									date: it.dateStr,
 									summary: it.summary,
+									enclosures: it.enclosures,
 								})),
 							})),
 						},
+						pagination,
 					},
 				};
 			} catch (err) {

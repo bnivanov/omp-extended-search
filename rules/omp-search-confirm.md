@@ -8,7 +8,7 @@ alwaysApply: true
 
 When the user asks for something that needs **live outside research** — web facts, news, social chatter, papers, launches, repos, feeds, comparisons, multi-source synthesis — **do not call** research tools immediately.
 
-That includes: built-in `web_search`, and any installed extended tool (`firecrawl_search`, `exa_search`, `parallel_search`, `x_search`, `hackernews_search`, `reddit_search`, `producthunt_search`, `github_search`, `arxiv_search`, `feed_search`).
+That includes: built-in `web_search`, and any installed extended tool (`firecrawl_search`, `firecrawl_crawl`, `exa_search`, `parallel_search`, `x_search`, `hackernews_search`, `reddit_search`, `producthunt_search`, `github_search`, `arxiv_search`, `feed_search`).
 
 Instead, use **this session's main model** (you) to propose a plan first, then wait.
 
@@ -46,6 +46,9 @@ Pick **one** primary path, or an explicit combination. Prefer the cheapest path 
 | New / trending GitHub repos | **`github_search`** | Creation window + stars proxy |
 | Academic papers | **`arxiv_search`** | arXiv API; free |
 | Lab blogs / newsletters / RSS | **`feed_search`** | Bundles or any feed URL; free |
+| Discover every URL on a site / sitemap | **`firecrawl_crawl` operation=map** | Cheap discovery, one call |
+| Extract one known page as markdown | **`firecrawl_crawl` operation=scrape** | Prefer free `read <url>` for simple public pages |
+| Traverse many pages of a public site | **`firecrawl_crawl` operation=crawl** | Only managed crawl primitive; bills per page |
 | User said “expand” / high stakes / uncertain | **`web_search` + one or more extended tools** | Merge citations after |
 
 Also note when **not** to use these tools (codebase-only, pure reasoning, files already in context).
@@ -115,10 +118,20 @@ For each tool you plan to call, list the resolved settings and a **one-clause re
 - `bundle`: `ai-labs` | `tech-news`, **or** explicit `urls`
 - optional `query` keyword filter, `since_days`, `limit` / `per_feed_limit`
 
+### If using `firecrawl_crawl`
+- `operation`: `map` | `scrape` | `crawl` | `status` | `cancel`
+- map: `url` (required), optional `search`, `limit` (up to 100000), `include_subdomains`
+- scrape: `url` (required), `formats` (default `["markdown"]`), `only_main_content` (default `true`), `max_age_ms`
+- crawl: `url` (required), `limit` (default `20`, hard max `500`), `max_discovery_depth`, `include_paths`/`exclude_paths`, `scrape_options` (`formats`, `only_main_content`), `poll_timeout_ms` (default `300000`), `wait` (default `true`)
+- status/cancel: `job_id` (required)
+- Firecrawl sends no cookies or session, so this reaches **public pages only**; anything behind a login needs the `xd://browser` device
+- Crawling bills **per scraped page** — the plan MUST name the page `limit` before approval
+
 ### Cost / latency snapshot
 Order-of-magnitude is fine:
 - web_search / HN / reddit / github / arxiv / feeds / Product Hunt: free or already-provisioned / seconds
 - firecrawl_search: keyless is limited; search costs credits per source, and optional full-page scraping adds per-result credits + latency
+- firecrawl_crawl: map is cheap discovery; scrape/crawl bill per page and crawl cost scales with page count — plan MUST name the page limit before approval (crawl default 20, hard max 500); slower when `wait=true`
 - exa auto+summary: ~$0.01 / few seconds; deep higher
 - parallel turbo/basic/advanced: ~$0.001–0.005 / sub-second–few seconds
 - parallel task lite/base/core: cents–tens of cents / tens of seconds+

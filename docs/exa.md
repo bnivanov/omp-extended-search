@@ -63,6 +63,17 @@ Use when you know the entity type — they beat generic web noise.
 
 `operation: "contents"` with `urls` (≤20) fetches/parses those pages through Exa. Always requests text + highlights; add `query` to also get a focused summary per URL.
 
+## Pagination
+
+None of the three operations paginate — `details.pagination` always reports `continuation_supported: false` (no page/cursor parameter).
+
+- **`search`** — one shot up to `num_results` / `limit` (max 100). When the result set may be truncated, the trailing line says so and tells you to raise the limit or narrow the query.
+- **`answer`** / **`contents`** — no result-limit knob, so neither emits a truncation warning. `answer` returns one synthesized paragraph + citations; `contents` returns whatever Exa has for the URLs you passed (≤20).
+
+## Resilience
+
+All three endpoints are billed POSTs. Transient failures retry with bounded exponential jitter (honoring `Retry-After` against the remaining deadline). Retryable statuses: `408` / `425` / `429` / `502` / `503` / `504`, plus pre-response transport errors. **`500` is deliberately excluded** — the server may already have billed. Aborts normalize to `AbortError`; the tool timeout interrupts a retry backoff.
+
 ## Environment defaults
 
 | Env | Default | Effect |

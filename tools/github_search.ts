@@ -15,9 +15,75 @@ const USER_AGENT = "omp-extended-search";
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
 const FETCH_TIMEOUT_MS = 15000;
+const GH_AUTH_TIMEOUT_MS = 5000;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const RECENCY_DAYS = { day: 1, week: 7, month: 30, year: 365 };
 const VALID_SORT = { stars: true, forks: true, updated: true, best_match: true };
+
+const RETRY_MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 8000;
+// Unbilled GET: 500 stays retryable (server may not have completed).
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const GITHUB_SEARCH_RESULT_CAP = 1000;
+
+function asAbortError(reason, fallbackMessage) {
+	if (reason && typeof reason === "object" && (reason.name === "AbortError" || reason.name === "TimeoutError")) return reason;
+	const error = new Error(reason instanceof Error ? reason.message : (fallbackMessage || "aborted"));
+	error.name = "AbortError";
+	if (reason !== undefined) error.cause = reason;
+	return error;
+}
+
+function retryDelayMs(attempt, retryAfterHeader) {
+	const raw = typeof retryAfterHeader === "string" ? retryAfterHeader.trim() : "";
+	if (raw) {
+		const seconds = Number.parseFloat(raw);
+		if (Number.isFinite(seconds) && seconds >= 0) return { delayMs: seconds * 1000, fromHeader: true };
+		const at = Date.parse(raw);
+		if (Number.isFinite(at)) return { delayMs: Math.max(at - Date.now(), 0), fromHeader: true };
+	}
+	const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+	return { delayMs: Math.round(backoff * (0.5 + Math.random() * 0.5)), fromHeader: false };
+}
+
+function sleepWithAbort(ms, signal) {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(asAbortError(signal.reason, "aborted"));
+			return;
+		}
+		const timer = setTimeout(() => {
+			signal?.removeEventListener?.("abort", onAbort);
+			resolve(undefined);
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(asAbortError(signal?.reason, "aborted"));
+		};
+		signal?.addEventListener?.("abort", onAbort, { once: true });
+	});
+}
+
+async function waitBeforeRetry(delayInfo, ctrl, deadlineAt, lastFailureMessage) {
+	const remaining = deadlineAt - Date.now();
+	const delayMs = delayInfo.delayMs;
+	if (delayInfo.fromHeader) {
+		if (delayMs > remaining) {
+			const askedSec = Math.ceil(delayMs / 1000);
+			const leftSec = Math.max(0, Math.ceil(remaining / 1000));
+			throw new Error(
+				`${lastFailureMessage || "GitHub API request failed"}: server asked for ${askedSec}s but only ${leftSec}s of the request budget remains; not retried.`,
+			);
+		}
+		await sleepWithAbort(delayMs, ctrl.signal);
+		return;
+	}
+	if (remaining <= 0) {
+		throw new Error(`${lastFailureMessage || "GitHub API request failed"} (request budget exhausted)`);
+	}
+	await sleepWithAbort(Math.min(delayMs, remaining), ctrl.signal);
+}
 
 function clampInt(value, fallback, min, max) {
 	const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
@@ -42,21 +108,42 @@ function recencyToCreatedAfter(recency, now = new Date()) {
 	return new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
-async function resolveToken(host) {
+async function resolveToken(host, signal) {
 	const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-	if (envToken && String(envToken).trim()) return String(envToken).trim();
+	if (envToken && String(envToken).trim()) {
+		return {
+			token: String(envToken).trim(),
+			authMode: process.env.GITHUB_TOKEN ? "GITHUB_TOKEN" : "GH_TOKEN",
+		};
+	}
 
 	if (host && typeof host.exec === "function") {
+		// host.exec supports { signal, timeout, cwd } (ExecOptions); no maxBuffer option.
+		// timeout/signal kill the child; always clear any local timer in finally.
+		let timeoutTimer;
 		try {
-			const result = await host.exec("gh", ["auth", "token"], {});
-			if (result && result.code === 0 && result.stdout && String(result.stdout).trim()) {
-				return String(result.stdout).trim();
+			if (signal?.aborted) {
+				throw asAbortError(signal.reason, "aborted");
 			}
-		} catch {
+			const result = await host.exec("gh", ["auth", "token"], {
+				timeout: GH_AUTH_TIMEOUT_MS,
+				signal,
+			});
+			if (result && result.killed) {
+				return { token: undefined, authMode: "anonymous (gh auth token timed out)" };
+			}
+			if (result && result.code === 0 && result.stdout && String(result.stdout).trim()) {
+				return { token: String(result.stdout).trim(), authMode: "gh auth token" };
+			}
+		} catch (err) {
+			if (err && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+			if (signal?.aborted) throw asAbortError(signal.reason, "aborted");
 			// gh may be absent or fail; fall through to unauthenticated
+		} finally {
+			if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
 		}
 	}
-	return undefined;
+	return { token: undefined, authMode: "anonymous" };
 }
 
 function buildQuery(params) {
@@ -102,18 +189,37 @@ function buildSearchUrl(params) {
 		qs.set("sort", sort);
 		qs.set("order", "desc");
 	}
-	qs.set("per_page", String(clampInt(params.limit, DEFAULT_LIMIT, 1, MAX_LIMIT)));
-	return `${API_URL}?${qs.toString()}`;
+	const perPage = clampInt(params.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
+	const maxPage = Math.max(1, Math.floor(GITHUB_SEARCH_RESULT_CAP / perPage));
+	const requestedPage = typeof params.page === "number" && Number.isFinite(params.page) ? Math.floor(params.page) : 1;
+	if (requestedPage < 1) {
+		throw new Error("page must be >= 1");
+	}
+	if (requestedPage > maxPage) {
+		throw new Error(
+			`page ${requestedPage} exceeds GitHub Search API's first-${GITHUB_SEARCH_RESULT_CAP}-results ceiling at per_page=${perPage} (max page is ${maxPage}).`,
+		);
+	}
+	const page = requestedPage;
+	qs.set("per_page", String(perPage));
+	qs.set("page", String(page));
+	return { url: `${API_URL}?${qs.toString()}`, perPage, page, maxPage };
 }
 
-function formatResults(data, unauthenticated) {
+function formatResults(data, unauthenticated, pagination) {
 	const items = Array.isArray(data?.items) ? data.items : [];
 	const total = typeof data?.total_count === "number" ? data.total_count : items.length;
+	const page = pagination?.page ?? 1;
+	const hasMore = Boolean(pagination?.has_more);
+	const moreSuffix = hasMore ? `; more available — request page: ${page + 1}` : "";
+	const showingLine = `Showing ${items.length} of ${typeof data?.total_count === "number" ? total : "unknown"} (page ${page})${moreSuffix}`;
+
 	if (items.length === 0) {
 		let msg = `${total} total matches; showing 0:`;
 		if (unauthenticated) {
 			msg += "\nNote: unauthenticated request — results are rate-limited; set GITHUB_TOKEN to raise the limit.";
 		}
+		msg += `\n${showingLine}`;
 		return msg;
 	}
 
@@ -140,15 +246,18 @@ function formatResults(data, unauthenticated) {
 		out.push("");
 		out.push("Note: unauthenticated request — results are rate-limited; set GITHUB_TOKEN to raise the limit.");
 	}
+	out.push("");
+	out.push(showingLine);
 	return out.join("\n");
 }
 
 async function searchRepos(url, token, signal, timeoutMs = FETCH_TIMEOUT_MS) {
 	const ctrl = new AbortController();
+	const deadlineAt = Date.now() + timeoutMs;
 	const timer = setTimeout(() => ctrl.abort(new DOMException("request timeout", "TimeoutError")), timeoutMs);
-	const onAbort = () => ctrl.abort();
+	const onAbort = () => ctrl.abort(asAbortError(signal?.reason, "aborted"));
 	if (signal) {
-		if (signal.aborted) ctrl.abort();
+		if (signal.aborted) ctrl.abort(asAbortError(signal.reason, "aborted"));
 		else signal.addEventListener("abort", onAbort, { once: true });
 	}
 	try {
@@ -159,29 +268,56 @@ async function searchRepos(url, token, signal, timeoutMs = FETCH_TIMEOUT_MS) {
 		};
 		if (token) headers.Authorization = `Bearer ${token}`;
 
-		const res = await fetch(url, { signal: ctrl.signal, headers });
-		const remaining = res.headers.get("x-ratelimit-remaining");
-		const bodyText = await res.text();
-		let body;
-		try {
-			body = bodyText ? JSON.parse(bodyText) : {};
-		} catch {
-			body = { message: bodyText };
-		}
+		let lastFailureMessage = "";
+		for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+			try {
+				const res = await fetch(url, { signal: ctrl.signal, headers });
+				const remaining = res.headers.get("x-ratelimit-remaining");
+				if (RETRYABLE_STATUS.has(res.status) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+					const delay = retryDelayMs(attempt, res.headers.get("retry-after"));
+					try { await res.arrayBuffer(); } catch { /* drain */ }
+					lastFailureMessage = `GitHub API HTTP ${res.status}`;
+					await waitBeforeRetry(delay, ctrl, deadlineAt, lastFailureMessage);
+					continue;
+				}
 
-		if (res.status === 403 || res.status === 429) {
-			const msg = body?.message ? String(body.message) : res.statusText;
-			throw new Error(
-				`GitHub API rate limit exceeded (HTTP ${res.status}). ${msg} Set GITHUB_TOKEN or run \`gh auth login\` to raise the limit.`,
-			);
-		}
-		if (!res.ok) {
-			const msg = body?.message ? String(body.message) : res.statusText;
-			throw new Error(`GitHub API HTTP ${res.status}: ${msg}`);
-		}
+				const bodyText = await res.text();
+				let body;
+				try {
+					body = bodyText ? JSON.parse(bodyText) : {};
+				} catch {
+					body = { message: bodyText };
+				}
 
-		const remainingNum = remaining != null ? Number(remaining) : undefined;
-		return { data: body, remaining: remainingNum };
+				if (res.status === 403 || res.status === 429) {
+					const msg = body?.message ? String(body.message) : res.statusText;
+					const suffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : "";
+					throw new Error(
+						`GitHub API rate limit exceeded (HTTP ${res.status}). ${msg} Set GITHUB_TOKEN or run \`gh auth login\` to raise the limit.${suffix}`,
+					);
+				}
+				if (!res.ok) {
+					const msg = body?.message ? String(body.message) : res.statusText;
+					const suffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : "";
+					throw new Error(`GitHub API HTTP ${res.status}: ${msg}${suffix}`);
+				}
+
+				const remainingNum = remaining != null ? Number(remaining) : undefined;
+				return { data: body, remaining: remainingNum };
+			} catch (error) {
+				if (error && (error.name === "AbortError" || error.name === "TimeoutError")) throw error;
+				// Application errors (non-OK already formatted) — do not retry further
+				if (error instanceof Error && /GitHub API/.test(error.message)) throw error;
+				lastFailureMessage = error instanceof Error ? error.message : String(error);
+				if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+					const delay = retryDelayMs(attempt, undefined);
+					await waitBeforeRetry(delay, ctrl, deadlineAt, lastFailureMessage);
+					continue;
+				}
+				throw new Error(`${lastFailureMessage} (after ${attempt + 1} attempts)`);
+			}
+		}
+		throw new Error(lastFailureMessage || "GitHub API request failed");
 	} finally {
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", onAbort);
@@ -220,6 +356,12 @@ const factory = (host) => {
 				.optional()
 				.describe("Sort order (default best_match). stars|forks|updated use order=desc."),
 			limit: z.number().int().min(1).max(MAX_LIMIT).optional().describe(`Max results 1-${MAX_LIMIT} (default ${DEFAULT_LIMIT}).`),
+			page: z
+				.number()
+				.int()
+				.min(1)
+				.optional()
+				.describe("1-indexed page of results (default 1). Sent as GitHub Search API page."),
 		}),
 
 		formatApprovalDetails(args) {
@@ -228,6 +370,7 @@ const factory = (host) => {
 			const bits = [];
 			bits.push(`sort=${a.sort && VALID_SORT[a.sort] ? a.sort : "best_match"}`);
 			bits.push(`limit=${a.limit ?? DEFAULT_LIMIT}`);
+			bits.push(`page=${a.page ?? 1}`);
 			if (a.recency) bits.push(`recency=${a.recency}`);
 			if (a.created_after) bits.push(`created>=${a.created_after}`);
 			if (a.created_before) bits.push(`created<=${a.created_before}`);
@@ -241,11 +384,34 @@ const factory = (host) => {
 
 		async execute(_toolCallId, params, _onUpdate, _ctx, signal) {
 			try {
-				const url = buildSearchUrl(params || {});
-				const token = await resolveToken(host);
+				const { url, perPage, page, maxPage } = buildSearchUrl(params || {});
+				const { token, authMode } = await resolveToken(host, signal);
 				const { data, remaining } = await searchRepos(url, token, signal);
 
-				let text = formatResults(data, !token);
+				const items = Array.isArray(data?.items) ? data.items : [];
+				const upstreamTotal = typeof data?.total_count === "number" ? data.total_count : undefined;
+				const returned = items.length;
+				// GitHub Search only serves the first 1000 results; cap continuation there.
+				const servedThrough = page * perPage;
+				const absoluteCap = GITHUB_SEARCH_RESULT_CAP;
+				const moreByTotal =
+					typeof upstreamTotal === "number"
+						? servedThrough < Math.min(upstreamTotal, absoluteCap)
+						: returned >= perPage && servedThrough < absoluteCap;
+				const hasMore = moreByTotal && page < maxPage;
+				const pagination = {
+					page,
+					per_page: perPage,
+					returned,
+					upstream_total: upstreamTotal,
+					result_cap: absoluteCap,
+					max_page: maxPage,
+					has_more: hasMore,
+					continuation_supported: true,
+					next: hasMore ? page + 1 : undefined,
+				};
+
+				let text = formatResults(data, !token, pagination);
 				if (typeof remaining === "number" && remaining < 5) {
 					text += `\nRate limit warning: x-ratelimit-remaining=${remaining}.`;
 				}
@@ -258,9 +424,11 @@ const factory = (host) => {
 							query: buildQuery(params || {}),
 							total_count: data?.total_count,
 							authenticated: Boolean(token),
+							authMode,
 							rate_limit_remaining: remaining,
 							items: data?.items ?? [],
 						},
+						pagination,
 					},
 				};
 			} catch (err) {

@@ -45,6 +45,12 @@ const DEFAULT_CONTENTS = VALID_CONTENTS.has(ENV_CONTENTS) ? ENV_CONTENTS : "summ
 
 const MAX_SNIPPET = 1200;
 
+const RETRY_MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 8000;
+// Billed POSTs (search/answer/contents): omit 500 — server may have already processed/billed.
+const RETRYABLE_STATUS = new Set([408, 425, 429, 502, 503, 504]);
+
 function clampInt(value, fallback, min, max) {
 	const n = typeof value === "number" ? value : Number(value);
 	if (!Number.isFinite(n)) return fallback;
@@ -117,42 +123,214 @@ async function resolveExaKey(ctx) {
 	return undefined;
 }
 
+function retryDelayMs(attempt, retryAfterHeader) {
+	const raw = typeof retryAfterHeader === "string" ? retryAfterHeader.trim() : "";
+	if (raw) {
+		const seconds = Number.parseFloat(raw);
+		if (Number.isFinite(seconds) && seconds >= 0) {
+			return { delayMs: seconds * 1000, fromHeader: true };
+		}
+		const at = Date.parse(raw);
+		if (Number.isFinite(at)) {
+			return { delayMs: Math.max(at - Date.now(), 0), fromHeader: true };
+		}
+	}
+	const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+	return { delayMs: Math.round(backoff * (0.5 + Math.random() * 0.5)), fromHeader: false };
+}
+
+function asAbortError(reason, fallbackMessage) {
+	if (reason && typeof reason === "object" && (reason.name === "AbortError" || reason.name === "TimeoutError")) {
+		return reason;
+	}
+	const error = new Error(reason instanceof Error ? reason.message : (fallbackMessage || "aborted"));
+	error.name = "AbortError";
+	if (reason !== undefined) error.cause = reason;
+	return error;
+}
+
+function sleepWithAbort(ms, signal) {
+	const { promise, resolve, reject } = Promise.withResolvers();
+	if (signal?.aborted) {
+		reject(asAbortError(signal.reason, "aborted"));
+		return promise;
+	}
+	const timer = setTimeout(() => {
+		signal?.removeEventListener?.("abort", onAbort);
+		resolve(undefined);
+	}, ms);
+	const onAbort = () => {
+		clearTimeout(timer);
+		reject(asAbortError(signal.reason, "aborted"));
+	};
+	signal?.addEventListener?.("abort", onAbort, { once: true });
+	return promise;
+}
+
+function buildPagination({ page = 1, per_page, returned, upstream_total, has_more, continuation_supported = false } = {}) {
+	const pagination = {
+		page,
+		per_page,
+		returned,
+		continuation_supported: Boolean(continuation_supported),
+	};
+	if (upstream_total != null && Number.isFinite(Number(upstream_total))) {
+		pagination.upstream_total = Number(upstream_total);
+	}
+	let more;
+	if (typeof has_more === "boolean") {
+		more = has_more;
+	} else if (pagination.upstream_total != null) {
+		more = page * per_page < pagination.upstream_total;
+	} else {
+		more = per_page > 0 && returned >= per_page;
+	}
+	// P: never co-occur has_more:true with continuation_supported:false — surface truncation instead.
+	if (more && !pagination.continuation_supported) {
+		pagination.has_more = false;
+		pagination.truncated = true;
+	} else {
+		pagination.has_more = more;
+	}
+	return pagination;
+}
+
+function formatPaginationLine(pagination) {
+	const returned = pagination.returned;
+	const perPage = pagination.per_page;
+	const total =
+		pagination.upstream_total != null ? String(pagination.upstream_total) : null;
+	const base =
+		total != null
+			? `Showing ${returned} of ${total} results (requested limit ${perPage})`
+			: `Showing ${returned} results (requested limit ${perPage})`;
+	// Honor the computed flag — do not re-derive truncation from returned >= perPage.
+	if (pagination.has_more && pagination.continuation_supported) {
+		const next =
+			pagination.next != null ? String(pagination.next) : String((pagination.page || 1) + 1);
+		return `${base}; more available — request page: ${next}`;
+	}
+	if (pagination.truncated) {
+		return `${base} — the result set may be truncated; this tool has no pagination, so raise the limit or narrow the query to see more.`;
+	}
+	return `${base}.`;
+}
+
 async function fetchJson(url, apiKey, body, signal, timeoutMs = 120000) {
 	const fetchImpl = globalThis.fetch;
 	const controller = new AbortController();
+	const deadlineAt = Date.now() + timeoutMs;
 	const onAbort = () => controller.abort(signal?.reason);
 	if (signal) {
 		if (signal.aborted) controller.abort(signal.reason);
 		else signal.addEventListener("abort", onAbort, { once: true });
 	}
-	const timer = setTimeout(() => controller.abort(new Error(`Exa request timed out after ${timeoutMs}ms`)), timeoutMs);
+	const timeoutErr = Object.assign(new Error(`Exa request timed out after ${timeoutMs}ms`), {
+		name: "TimeoutError",
+	});
+	const timer = setTimeout(() => controller.abort(timeoutErr), timeoutMs);
+	let attempts = 0;
+	let lastError;
+
+	const remainingMs = () => Math.max(0, deadlineAt - Date.now());
+
+	const throwIfAborted = (error) => {
+		if (error && (error.name === "AbortError" || error.name === "TimeoutError")) throw error;
+		if (controller.signal.aborted) {
+			throw asAbortError(controller.signal.reason, "aborted");
+		}
+		if (signal?.aborted) {
+			throw asAbortError(signal.reason, "aborted");
+		}
+	};
+
+	const waitBeforeRetry = async (attempt, retryAfterHeader, priorError) => {
+		const { delayMs, fromHeader } = retryDelayMs(attempt, retryAfterHeader);
+		const left = remainingMs();
+		if (delayMs > left) {
+			if (fromHeader) {
+				const needSec = Math.ceil(delayMs / 1000);
+				const leftSec = Math.ceil(left / 1000);
+				const err = new Error(
+					`${priorError instanceof Error ? priorError.message : String(priorError)} — server asked for ${needSec}s but only ${leftSec}s of the request budget remains; not retried.`,
+				);
+				if (priorError && typeof priorError === "object" && priorError.status != null) {
+					err.status = priorError.status;
+				}
+				throw err;
+			}
+			// Computed backoff would overrun the tool deadline — surface the prior error.
+			throw priorError;
+		}
+		// S1: always sleep on the internal controller so the tool timeout can interrupt backoff.
+		await sleepWithAbort(delayMs, controller.signal);
+	};
+
 	try {
-		const res = await fetchImpl(url, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"x-api-key": apiKey,
-			},
-			body: JSON.stringify(body),
-			signal: controller.signal,
-		});
-		const text = await res.text();
-		let data;
-		try {
-			data = text ? JSON.parse(text) : {};
-		} catch {
-			data = { raw: text };
+		for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+			attempts = attempt + 1;
+			try {
+				const res = await fetchImpl(url, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-api-key": apiKey,
+					},
+					body: JSON.stringify(body),
+					signal: controller.signal,
+				});
+				const text = await res.text();
+				let data;
+				try {
+					data = text ? JSON.parse(text) : {};
+				} catch {
+					data = { raw: text };
+				}
+				if (!res.ok) {
+					const msg =
+						(data && (data.error || data.message || data.detail)) ||
+						text ||
+						`HTTP ${res.status}`;
+					const err = new Error(
+						`Exa API error (${res.status}): ${typeof msg === "string" ? msg : JSON.stringify(msg)}`,
+					);
+					err.status = res.status;
+					if (RETRYABLE_STATUS.has(res.status) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+						lastError = err;
+						await waitBeforeRetry(attempt, res.headers?.get?.("retry-after"), err);
+						continue;
+					}
+					if (attempts > 1) err.message += ` (after ${attempts} attempts)`;
+					throw err;
+				}
+				return data;
+			} catch (error) {
+				throwIfAborted(error);
+				// Finalized HTTP errors — do not re-enter retry from the catch path.
+				if (error?.status != null && !RETRYABLE_STATUS.has(error.status)) throw error;
+				if (error?.status != null && attempt >= RETRY_MAX_ATTEMPTS - 1) throw error;
+				const retryableNetwork = error?.status == null;
+				const retryableStatus = error?.status != null && RETRYABLE_STATUS.has(error.status);
+				if ((retryableNetwork || retryableStatus) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+					// Status retries already waited above; only network errors reach here without a wait.
+					if (retryableNetwork) {
+						lastError = error;
+						await waitBeforeRetry(attempt, null, error);
+						continue;
+					}
+					throw error;
+				}
+				if (attempts > 1 && error instanceof Error && !error.message.includes("(after ")) {
+					error.message += ` (after ${attempts} attempts)`;
+				}
+				throw error;
+			}
 		}
-		if (!res.ok) {
-			const msg =
-				(data && (data.error || data.message || data.detail)) ||
-				text ||
-				`HTTP ${res.status}`;
-			const err = new Error(`Exa API error (${res.status}): ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
-			err.status = res.status;
-			throw err;
+		const fallback = lastError || new Error("Exa request failed");
+		if (fallback instanceof Error && attempts > 1 && !fallback.message.includes("(after ")) {
+			fallback.message += ` (after ${attempts} attempts)`;
 		}
-		return data;
+		throw fallback;
 	} finally {
 		clearTimeout(timer);
 		if (signal) signal.removeEventListener("abort", onAbort);
@@ -166,7 +344,7 @@ function snippetFromResult(r) {
 	return undefined;
 }
 
-function formatSearchForLLM(data, meta) {
+function formatSearchForLLM(data, meta, pagination) {
 	const lines = [];
 	lines.push(`# Exa search (${meta.type}${meta.category ? `, category=${meta.category}` : ""})`);
 	if (data.requestId) lines.push(`requestId: ${data.requestId}`);
@@ -179,6 +357,7 @@ function formatSearchForLLM(data, meta) {
 	const results = Array.isArray(data.results) ? data.results : [];
 	if (!results.length) {
 		lines.push("No results.");
+		if (pagination) lines.push("", formatPaginationLine(pagination));
 		return lines.join("\n");
 	}
 
@@ -197,7 +376,9 @@ function formatSearchForLLM(data, meta) {
 		}
 		lines.push("");
 	});
-	return lines.join("\n").trimEnd();
+	let text = lines.join("\n").trimEnd();
+	if (pagination) text = `${text}\n\n${formatPaginationLine(pagination)}`;
+	return text;
 }
 
 function formatAnswerForLLM(data) {
@@ -219,6 +400,7 @@ function formatAnswerForLLM(data) {
 			if (snip) lines.push(`   ${snip.replace(/\s+/g, " ").trim().slice(0, 300)}`);
 		});
 	}
+	// answer has no result-limit knob — never emit a truncation/pagination footer.
 	return lines.join("\n");
 }
 
@@ -416,10 +598,18 @@ const factory = (host) => {
 						text: params.text === true,
 					};
 					const data = await fetchJson(EXA_ANSWER_URL, auth.token, body, signal, 90000);
+					const citations = Array.isArray(data.citations) ? data.citations : [];
+					const pagination = buildPagination({
+						page: 1,
+						per_page: 1,
+						returned: data.answer != null && data.answer !== "" ? 1 : 0,
+						has_more: false,
+					});
 					const text = formatAnswerForLLM(data);
 					return {
 						content: [{ type: "text", text }],
 						details: {
+							pagination,
 							response: {
 								provider: "exa",
 								operation: "answer",
@@ -427,7 +617,7 @@ const factory = (host) => {
 								requestId: data.requestId,
 								costDollars: data.costDollars,
 								answer: data.answer,
-								citations: data.citations,
+								citations,
 							},
 						},
 					};
@@ -448,10 +638,19 @@ const factory = (host) => {
 						summary: params.query ? { query: params.query } : undefined,
 					};
 					const data = await fetchJson(EXA_CONTENTS_URL, auth.token, body, signal, 120000);
-					const text = formatSearchForLLM(data, { type: "contents" });
+					const returned = Array.isArray(data.results) ? data.results.length : 0;
+					const pagination = buildPagination({
+						page: 1,
+						per_page: urls.length,
+						returned,
+						has_more: false,
+						continuation_supported: false,
+					});
+					const text = formatSearchForLLM(data, { type: "contents" }, pagination);
 					return {
 						content: [{ type: "text", text }],
 						details: {
+							pagination,
 							response: {
 								provider: "exa",
 								operation: "contents",
@@ -468,7 +667,6 @@ const factory = (host) => {
 				const { body, type, numResults, category } = buildSearchBody(params);
 				const timeout = type === "deep" ? 180000 : 120000;
 				const data = await fetchJson(EXA_SEARCH_URL, auth.token, body, signal, timeout);
-				const text = formatSearchForLLM(data, { type, category });
 				const sources = (Array.isArray(data.results) ? data.results : [])
 					.filter((r) => asString(r.url))
 					.map((r) => ({
@@ -478,10 +676,17 @@ const factory = (host) => {
 						publishedDate: asString(r.publishedDate),
 						author: asString(r.author),
 					}));
+				const pagination = buildPagination({
+					page: 1,
+					per_page: numResults,
+					returned: sources.length,
+				});
+				const text = formatSearchForLLM(data, { type, category }, pagination);
 
 				return {
 					content: [{ type: "text", text }],
 					details: {
+						pagination,
 						response: {
 							provider: "exa",
 							operation: "search",

@@ -15,6 +15,7 @@ Install only the ones you want.
 | X Search | `tools/x_search.ts` | Searches public posts on X (Twitter) via xAI's native search. Keyword, semantic, user, and thread search; can optionally resolve each cited post to its real text and engagement numbers. | `/login` → xAI Grok (SuperGrok or X Premium+), or `XAI_API_KEY` |
 | Exa Search | `tools/exa_search.ts` | Full Exa API: search types (`auto` / `fast` / `neural` / `deep`), vertical categories (papers, people, companies, github), domain/date filters, answer-with-citations, URL contents fetch. omp's native Exa path only ever uses `auto` + summary. | `/login` → Exa, or `EXA_API_KEY` |
 | Firecrawl Search | `tools/firecrawl_search.ts` | Direct Firecrawl Search API with web/news/images sources, GitHub/research/PDF categories, domain/date/location filters, highlights, optional page scraping, and raw response metadata. omp 17.0.9+ can use Firecrawl behind ordinary `web_search` when Firecrawl is explicitly selected in `providers.webSearchOrder`; this extension is the advanced/direct lane. | Credential order: omp session/provider Firecrawl credential first; `FIRECRAWL_API_KEY` second; keyless access last (limited). Either credential provides higher limits. |
+| Firecrawl Crawl | `tools/firecrawl_crawl.ts` | Site traversal: `map` (discover every URL on a domain), `scrape` (one page → markdown), `crawl` (managed multi-page crawl with polling), plus `status` and `cancel`. The only crawl primitive in the fleet — the search tools all need you to already know the URLs. Reaches **public pages only**: Firecrawl sends no cookies or session, so anything behind a login needs the `xd://browser` device. Bills per scraped page. | Same credential order as Firecrawl Search |
 | Parallel Search | `tools/parallel_search.ts` | Full Parallel V1 API: search modes (`turbo` / `basic` / `advanced`) with objective + multi-query support, URL extract, and deep-research task processors (`lite` … `ultra8x`). omp's native path hardcodes the old beta `fast` mode. | `/login` → Parallel, or `PARALLEL_API_KEY` |
 
 ## Install
@@ -23,14 +24,32 @@ Install only the ones you want.
 git clone https://github.com/bnivanov/omp-extended-search
 cd omp-extended-search
 
-./install.sh hackernews feed arxiv   # the free, no-key tools
-./install.sh x                      # just X search
-./install.sh exa parallel           # just Exa and Parallel
-./install.sh firecrawl              # advanced/direct Firecrawl controls
-./install.sh reddit                 # just Reddit
-./install.sh all                    # everything
-./install.sh                        # prints help, installs nothing
+./install.sh install hackernews feed arxiv   # the free, no-key tools
+./install.sh install exa parallel            # just Exa and Parallel
+./install.sh install firecrawl-crawl         # site map / scrape / crawl
+./install.sh install all                     # everything
+./install.sh hackernews feed                 # legacy form — same as install
+./install.sh                                 # prints help, installs nothing
 ```
+
+### Keeping tools current
+
+Tool files are **copied**, not symlinked, so a `git pull` does not update what omp actually loads.
+`update` exists for that, and it never installs anything you did not choose:
+
+```bash
+./install.sh list            # every repo tool: not installed / installed (up to date) / installed (outdated)
+./install.sh update          # refresh ONLY the tools already in ~/.omp/agent/tools
+./install.sh update exa      # refresh one, errors if you never installed it
+./install.sh update --all    # refresh installed tools AND add every repo tool that is missing
+./install.sh uninstall arxiv # remove one
+```
+
+`list` compares file contents, not timestamps, so `outdated` means the bytes actually differ. Every copy
+reports `Installed` / `Added` / `Updated` / `Unchanged` per file.
+
+Use plain `update` after a `git pull` to refresh your selection. Use `update --all` when you also want
+tools added to the repo since you installed — otherwise a newly added tool is silently never discovered.
 
 Or grab a single tool without cloning the repo:
 
@@ -129,6 +148,46 @@ That installs one global recommend-first **agent rule** ([rules/omp-search-confi
 
 **Intended UX:** the model proposes sources + parameters in the chat and waits for your “go” / tweaks. It is **not** a per-call “Approve x_search?” popup. Keep `tools.approvalMode: yolo` (omp default for many setups) or per-tool `allow` so tools run quietly after you approve the plan in chat. Only set a tool to `prompt` if you *want* a hard UI dialog every call. Say “just search” anytime to skip the chat gate for one request.
 
+## Known limitations
+
+These come from a source-verified audit of all eleven tools ([docs/capability-matrix.md](docs/capability-matrix.md)),
+re-checked adversarially. Claims here are about what the code does, not what the upstream APIs advertise.
+
+### Resolved
+
+- **No retry or backoff.** Nine of ten tools issued a single request and threw. Every tool now retries
+  transient failures (408/425/429/502/503/504 plus pre-response transport errors) with bounded
+  exponential jitter, honoring an explicit `Retry-After` against the call's remaining deadline.
+- **Retries could double-charge.** Job creation (`parallel_search` task runs, `firecrawl_crawl` crawls)
+  is never retried — a lost response there would start a second billed job. For billed POSTs, `500` is
+  deliberately *not* retryable: the server accepted the work and may already have billed it.
+- **No pagination.** arXiv, GitHub, and Hacker News hardcoded the first page; Reddit hardcoded 25
+  results; Product Hunt requested no cursor. All five now paginate, and every tool reports a normalized
+  `details.pagination` block with `continuation_supported`, so an agent can tell "there is more, here is
+  how to get it" from "that is everything this tool can return".
+- **arXiv ignored the ~1 req/3 s policy.** There is now a process-wide gate that spaces every request,
+  including retries, with bounded admission.
+- **Product Hunt was dead without an env var.** It now resolves an omp session credential first,
+  matching the other tools.
+- **`gh auth token` could hang forever.** Bounded, with the caller's signal threaded through.
+- **No crawl primitive.** `firecrawl_crawl` adds `map` / `scrape` / `crawl`.
+- **No way to refresh installed tools.** `install.sh update` / `list` / `uninstall` (see Install).
+
+### Open
+
+| Limitation | Detail |
+|---|---|
+| No authenticated crawling | Firecrawl sends no cookies or session. Anything behind a login needs the `xd://browser` device, driven per-investigation. No tool here can reach it. |
+| Parallel task runs cannot be cancelled | Verified against the live API: `DELETE /v1/tasks/runs/{id}` → 405, and `POST …/cancel` returns the generic router 404, not Parallel's structured error body. There is no cancel endpoint. A timed-out run keeps executing and billing; the tool now surfaces `details.orphanedRun` with the run id and an `operation: "task_status"` to retrieve it later. |
+| No per-call spend guard | Exa `deep`, Parallel processors, and `firecrawl_crawl` can each run up cost. Cost is reported after the fact (`costDollars`, `creditsUsed`); nothing refuses a call for being too expensive. The plan-first gate is the current control. |
+| Exa / Parallel / X / Firecrawl search cannot paginate | Their APIs expose no page or cursor on these endpoints. These tools report truncation honestly rather than advertising a page you cannot request — raise the limit or narrow the query. |
+| GitHub search caps at 1000 results | An upstream ceiling, not ours. The tool now rejects a page beyond it instead of returning a 422. |
+| No geospatial search | Exa, Firecrawl, and Parallel accept a free-form location string as a ranking bias only — no coordinates, radius, or place details. |
+| No Stack Exchange / Discourse adapter | `feed_search` reads their public RSS best-effort; there is no API adapter and no thread/comment corpus search. |
+| No media search or transcription | No YouTube or podcast search, no download, no transcription. `feed_search` now parses `<enclosure>` so audio/video items keep their media URL, but nothing fetches them. |
+| No cross-registry package discovery | `read https://registry.npmjs.org/<pkg>` and the PyPI JSON API already work for a known package; there is no discovery or dependency-graph normalization across registries. |
+| Nothing persists between calls | Every tool is fetch-and-return. No result store, no snapshot diffing, no monitoring. Fan-out, merge, and follow-the-citation are composed per-investigation in the harness rather than built in. |
+
 ## Docs
 
 - [docs/hackernews.md](docs/hackernews.md) — HN search + feed parameters
@@ -139,7 +198,8 @@ That installs one global recommend-first **agent rule** ([rules/omp-search-confi
 - [docs/producthunt.md](docs/producthunt.md) — token setup and parameters
 - [docs/x.md](docs/x.md) — x_search settings: focus, reasoning effort, date windows, handle filters, post capture
 - [docs/exa.md](docs/exa.md) — exa_search settings: types, contents packing, categories, filters, answer, contents
-- [docs/firecrawl.md](docs/firecrawl.md) — firecrawl_search sources, categories, filters, highlights, optional scraping, costs, and raw response shape
+- [docs/firecrawl.md](docs/firecrawl.md) — `firecrawl_search` sources, categories, filters, highlights, optional scraping, costs, and raw response shape; plus `firecrawl_crawl` (`map` / `scrape` / `crawl` / `status` / `cancel`), page limits, and per-page cost
+- [docs/capability-matrix.md](docs/capability-matrix.md) — source-verified audit of what every tool can and cannot do (a snapshot; re-run the audit rather than hand-editing it)
 - [docs/parallel.md](docs/parallel.md) — parallel_search settings: modes, extract, task processors
 
 ### Agent rule (plan-first gate)

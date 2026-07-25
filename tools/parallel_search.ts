@@ -47,7 +47,7 @@ const VALID_PROCESSORS = new Set([
 	"ultra8x",
 ]);
 
-const VALID_OPS = new Set(["search", "extract", "task"]);
+const VALID_OPS = new Set(["search", "extract", "task", "task_status"]);
 
 const ENV_MODE = (process.env.OMP_PARALLEL_DEFAULT_MODE || "advanced").toLowerCase();
 const DEFAULT_MODE = VALID_MODES.has(ENV_MODE) ? ENV_MODE : "advanced";
@@ -56,6 +56,15 @@ const DEFAULT_PROCESSOR = VALID_PROCESSORS.has(ENV_PROC) ? ENV_PROC : "base";
 const DEFAULT_POLL_MS = clampInt(process.env.OMP_PARALLEL_MAX_POLL_MS, 180000, 5000, 900000);
 
 const MAX_EXCERPT = 2000;
+const EXTRACT_BODY_CAP = 8000;
+
+const RETRY_MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 8000;
+// Billed POSTs (search/extract) omit 500 — server may have already processed/billed.
+// Unbilled GETs (task status/result polls) use RETRYABLE_STATUS_GET which keeps 500.
+const RETRYABLE_STATUS = new Set([408, 425, 429, 502, 503, 504]);
+const RETRYABLE_STATUS_GET = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 function clampInt(value, fallback, min, max) {
 	const n = typeof value === "number" ? value : Number(value);
@@ -88,16 +97,112 @@ function normalizeProcessor(processor) {
 function sleep(ms, signal) {
 	const { promise, resolve, reject } = Promise.withResolvers();
 	if (signal?.aborted) {
-		reject(signal.reason || new Error("Aborted"));
+		reject(asAbortError(signal.reason, "Aborted"));
 		return promise;
 	}
-	const t = setTimeout(resolve, ms);
 	const onAbort = () => {
 		clearTimeout(t);
-		reject(signal.reason || new Error("Aborted"));
+		reject(asAbortError(signal.reason, "Aborted"));
 	};
+	const t = setTimeout(() => {
+		if (signal) signal.removeEventListener("abort", onAbort);
+		resolve(undefined);
+	}, ms);
 	if (signal) signal.addEventListener("abort", onAbort, { once: true });
 	return promise;
+}
+
+function retryDelayMs(attempt, retryAfterHeader) {
+	const raw = typeof retryAfterHeader === "string" ? retryAfterHeader.trim() : "";
+	if (raw) {
+		const seconds = Number.parseFloat(raw);
+		if (Number.isFinite(seconds) && seconds >= 0) {
+			return { delayMs: seconds * 1000, fromHeader: true };
+		}
+		const at = Date.parse(raw);
+		if (Number.isFinite(at)) {
+			return { delayMs: Math.max(at - Date.now(), 0), fromHeader: true };
+		}
+	}
+	const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+	return { delayMs: Math.round(backoff * (0.5 + Math.random() * 0.5)), fromHeader: false };
+}
+
+function asAbortError(reason, fallbackMessage) {
+	if (reason && typeof reason === "object" && (reason.name === "AbortError" || reason.name === "TimeoutError")) {
+		return reason;
+	}
+	const error = new Error(reason instanceof Error ? reason.message : (fallbackMessage || "aborted"));
+	error.name = "AbortError";
+	if (reason !== undefined) error.cause = reason;
+	return error;
+}
+
+function sleepWithAbort(ms, signal) {
+	const { promise, resolve, reject } = Promise.withResolvers();
+	if (signal?.aborted) {
+		reject(asAbortError(signal.reason, "aborted"));
+		return promise;
+	}
+	const timer = setTimeout(() => {
+		signal?.removeEventListener?.("abort", onAbort);
+		resolve(undefined);
+	}, ms);
+	const onAbort = () => {
+		clearTimeout(timer);
+		reject(asAbortError(signal.reason, "aborted"));
+	};
+	signal?.addEventListener?.("abort", onAbort, { once: true });
+	return promise;
+}
+
+function buildPagination({ page = 1, per_page, returned, upstream_total, has_more, continuation_supported = false } = {}) {
+	const pagination = {
+		page,
+		per_page,
+		returned,
+		continuation_supported: Boolean(continuation_supported),
+	};
+	if (upstream_total != null && Number.isFinite(Number(upstream_total))) {
+		pagination.upstream_total = Number(upstream_total);
+	}
+	let more;
+	if (typeof has_more === "boolean") {
+		more = has_more;
+	} else if (pagination.upstream_total != null) {
+		more = page * per_page < pagination.upstream_total;
+	} else {
+		more = per_page > 0 && returned >= per_page;
+	}
+	// P: never co-occur has_more:true with continuation_supported:false — surface truncation instead.
+	if (more && !pagination.continuation_supported) {
+		pagination.has_more = false;
+		pagination.truncated = true;
+	} else {
+		pagination.has_more = more;
+	}
+	return pagination;
+}
+
+function formatPaginationLine(pagination) {
+	const returned = pagination.returned;
+	const perPage = pagination.per_page;
+	const total =
+		pagination.upstream_total != null ? String(pagination.upstream_total) : null;
+	const base =
+		total != null
+			? `Showing ${returned} of ${total} results (requested limit ${perPage})`
+			: `Showing ${returned} results (requested limit ${perPage})`;
+	// Honor the computed flag — do not re-derive truncation from returned >= perPage.
+	if (pagination.has_more && pagination.continuation_supported) {
+		const next =
+			pagination.next != null ? String(pagination.next) : String((pagination.page || 1) + 1);
+		return `${base}; more available — request page: ${next}`;
+	}
+	if (pagination.truncated) {
+		return `${base} — the result set may be truncated; this tool has no pagination, so raise the limit or narrow the query to see more.`;
+	}
+	return `${base}.`;
 }
 async function resolveParallelKey(ctx) {
 	const authStorage = ctx?.modelRegistry?.authStorage;
@@ -130,41 +235,126 @@ function parseErrorBody(status, text) {
 	}
 }
 
-async function fetchJson(url, apiKey, { method = "POST", body, signal, timeoutMs = 120000 } = {}) {
+async function fetchJson(url, apiKey, { method = "POST", body, signal, timeoutMs = 120000, retry = true } = {}) {
 	const controller = new AbortController();
+	const deadlineAt = Date.now() + timeoutMs;
 	const onAbort = () => controller.abort(signal?.reason);
 	if (signal) {
 		if (signal.aborted) controller.abort(signal.reason);
 		else signal.addEventListener("abort", onAbort, { once: true });
 	}
-	const timer = setTimeout(
-		() => controller.abort(new Error(`Parallel request timed out after ${timeoutMs}ms`)),
-		timeoutMs,
-	);
+	const timeoutErr = Object.assign(new Error(`Parallel request timed out after ${timeoutMs}ms`), {
+		name: "TimeoutError",
+	});
+	const timer = setTimeout(() => controller.abort(timeoutErr), timeoutMs);
+	let attempts = 0;
+	let lastError;
+	// GETs (status/result polls) may retry 500; billed POSTs must not.
+	const retryableStatuses = method.toUpperCase() === "GET" ? RETRYABLE_STATUS_GET : RETRYABLE_STATUS;
+
+	const remainingMs = () => Math.max(0, deadlineAt - Date.now());
+
+	const throwIfAborted = (error) => {
+		if (error && (error.name === "AbortError" || error.name === "TimeoutError")) throw error;
+		if (controller.signal.aborted) {
+			throw asAbortError(controller.signal.reason, "aborted");
+		}
+		if (signal?.aborted) {
+			throw asAbortError(signal.reason, "aborted");
+		}
+	};
+
+	const waitBeforeRetry = async (attempt, retryAfterHeader, priorError) => {
+		const { delayMs, fromHeader } = retryDelayMs(attempt, retryAfterHeader);
+		const left = remainingMs();
+		if (delayMs > left) {
+			if (fromHeader) {
+				const needSec = Math.ceil(delayMs / 1000);
+				const leftSec = Math.ceil(left / 1000);
+				const err = new Error(
+					`${priorError instanceof Error ? priorError.message : String(priorError)} — server asked for ${needSec}s but only ${leftSec}s of the request budget remains; not retried.`,
+				);
+				if (priorError && typeof priorError === "object" && priorError.status != null) {
+					err.status = priorError.status;
+				}
+				throw err;
+			}
+			throw priorError;
+		}
+		// S1: always sleep on the internal controller so the tool timeout can interrupt backoff.
+		await sleepWithAbort(delayMs, controller.signal);
+	};
+
 	try {
-		const res = await fetch(url, {
-			method,
-			headers: {
-				"Content-Type": "application/json",
-				"x-api-key": apiKey,
-				"parallel-beta": "search-extract-2025-10-10",
-			},
-			body: body !== undefined ? JSON.stringify(body) : undefined,
-			signal: controller.signal,
-		});
-		const text = await res.text();
-		let data;
-		try {
-			data = text ? JSON.parse(text) : {};
-		} catch {
-			data = { raw: text };
+		for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+			attempts = attempt + 1;
+			try {
+				const res = await fetch(url, {
+					method,
+					headers: {
+						"Content-Type": "application/json",
+						"x-api-key": apiKey,
+						"parallel-beta": "search-extract-2025-10-10",
+					},
+					body: body !== undefined ? JSON.stringify(body) : undefined,
+					signal: controller.signal,
+				});
+				const text = await res.text();
+				let data;
+				try {
+					data = text ? JSON.parse(text) : {};
+				} catch {
+					data = { raw: text };
+				}
+				if (!res.ok) {
+					const err = new Error(
+						`Parallel API error (${res.status}): ${parseErrorBody(res.status, text)}`,
+					);
+					err.status = res.status;
+					const canRetryStatus =
+						retry && retryableStatuses.has(res.status) && attempt < RETRY_MAX_ATTEMPTS - 1;
+					if (canRetryStatus) {
+						lastError = err;
+						await waitBeforeRetry(attempt, res.headers?.get?.("retry-after"), err);
+						continue;
+					}
+					if (!retry && retryableStatuses.has(res.status)) {
+						err.message +=
+							" — not retried: job creation is not idempotent and a retry could start a second billed run.";
+					}
+					if (attempts > 1) err.message += ` (after ${attempts} attempts)`;
+					throw err;
+				}
+				return data;
+			} catch (error) {
+				throwIfAborted(error);
+				// HTTP errors thrown above already carry final messaging (incl. no-retry note).
+				if (error?.status != null) throw error;
+				// status-less = transport/network
+				if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+					if (!retry) {
+						const msg =
+							(error instanceof Error ? error.message : String(error)) +
+							" — not retried: job creation is not idempotent and a retry could start a second billed run.";
+						throw error instanceof Error
+							? Object.assign(error, { message: msg })
+							: new Error(msg);
+					}
+					lastError = error;
+					await waitBeforeRetry(attempt, null, error);
+					continue;
+				}
+				if (attempts > 1 && error instanceof Error && !error.message.includes("(after ")) {
+					error.message += ` (after ${attempts} attempts)`;
+				}
+				throw error;
+			}
 		}
-		if (!res.ok) {
-			const err = new Error(`Parallel API error (${res.status}): ${parseErrorBody(res.status, text)}`);
-			err.status = res.status;
-			throw err;
+		const fallback = lastError || new Error("Parallel request failed");
+		if (fallback instanceof Error && attempts > 1 && !fallback.message.includes("(after ")) {
+			fallback.message += ` (after ${attempts} attempts)`;
 		}
-		return data;
+		throw fallback;
 	} finally {
 		clearTimeout(timer);
 		if (signal) signal.removeEventListener("abort", onAbort);
@@ -257,7 +447,7 @@ function extractSearchSources(data) {
 		.filter(Boolean);
 }
 
-function formatSearchForLLM(data, meta) {
+function formatSearchForLLM(data, meta, pagination) {
 	const lines = [];
 	lines.push(`# Parallel search (mode=${meta.mode})`);
 	if (data.search_id || data.requestId) lines.push(`searchId: ${data.search_id || data.requestId}`);
@@ -274,6 +464,7 @@ function formatSearchForLLM(data, meta) {
 	const sources = extractSearchSources(data);
 	if (!sources.length) {
 		lines.push("No results.");
+		if (pagination) lines.push("", formatPaginationLine(pagination));
 		return { text: lines.join("\n"), sources };
 	}
 
@@ -287,10 +478,13 @@ function formatSearchForLLM(data, meta) {
 		}
 		lines.push("");
 	});
-	return { text: lines.join("\n").trimEnd(), sources };
+	let text = lines.join("\n").trimEnd();
+	if (pagination) text = `${text}\n\n${formatPaginationLine(pagination)}`;
+	return { text, sources };
 }
 
-function formatExtractForLLM(data) {
+function formatExtractForLLM(data, pagination, opts = {}) {
+	const preferFull = opts.preferFullContent === true;
 	const lines = [];
 	lines.push("# Parallel extract");
 	if (data.extract_id) lines.push(`extractId: ${data.extract_id}`);
@@ -306,10 +500,29 @@ function formatExtractForLLM(data) {
 		if (url) lines.push(`URL: ${url}`);
 		if (r.publish_date) lines.push(`Published: ${r.publish_date}`);
 		const excerpts = Array.isArray(r.excerpts) ? r.excerpts.filter(Boolean) : [];
-		const body = excerpts.join("\n\n") || asString(r.full_content) || "";
+		const full = asString(r.full_content) || "";
+		let body = "";
+		let bodyKind = "";
+		if (preferFull && full) {
+			body = full;
+			bodyKind = "full_content";
+		} else if (excerpts.length) {
+			body = excerpts.join("\n\n");
+			bodyKind = "excerpts";
+		} else if (full) {
+			body = full;
+			bodyKind = "full_content";
+		}
 		if (body) {
 			lines.push("");
-			lines.push(body.slice(0, 8000));
+			lines.push(`(${bodyKind})`);
+			if (body.length > EXTRACT_BODY_CAP) {
+				lines.push(
+					`${body.slice(0, EXTRACT_BODY_CAP)}… [${bodyKind} truncated at ${EXTRACT_BODY_CAP} chars]`,
+				);
+			} else {
+				lines.push(body);
+			}
 		}
 		lines.push("");
 	}
@@ -320,7 +533,9 @@ function formatExtractForLLM(data) {
 			lines.push(`- ${e.url}: ${e.error_type || "error"}${e.http_status_code ? ` (${e.http_status_code})` : ""}`);
 		}
 	}
-	return lines.join("\n").trimEnd();
+	let text = lines.join("\n").trimEnd();
+	if (pagination) text = `${text}\n\n${formatPaginationLine(pagination)}`;
+	return text;
 }
 
 function formatTaskForLLM(run, result) {
@@ -337,7 +552,7 @@ function formatTaskForLLM(run, result) {
 		return lines.join("\n");
 	}
 
-		if (output.type === "json" || (output.content != null && typeof output.content === "object")) {
+	if (output.type === "json" || (output.content != null && typeof output.content === "object")) {
 		lines.push("## Structured output");
 		lines.push("```json");
 		lines.push(JSON.stringify(output.content ?? output, null, 2).slice(0, 20000));
@@ -366,32 +581,91 @@ function formatTaskForLLM(run, result) {
 	return lines.join("\n");
 }
 
+function orphanMessage(runId) {
+	return (
+		`Task run ${runId} is still running remotely and was NOT cancelled — the Parallel API exposes no ` +
+		`cancel endpoint. Retrieve status later with operation="task_status" and run_id="${runId}" ` +
+		`(GET /v1/tasks/runs/{run_id}; not billed as a new run), or check the Parallel dashboard; it may continue to bill.`
+	);
+}
+
+function attachOrphanedRun(error, runId, reason) {
+	const orphanedRun = { runId, reason, cancellable: false };
+	if (error instanceof Error) {
+		const note = orphanMessage(runId);
+		if (!error.message.includes("was NOT cancelled")) {
+			error.message = error.message ? `${error.message} ${note}` : note;
+		}
+	}
+	if (error && typeof error === "object") {
+		error.orphanedRun = orphanedRun;
+	}
+	return error;
+}
+
 async function pollTask(apiKey, runId, signal, maxMs) {
 	const started = Date.now();
+	const deadlineAt = started + maxMs;
 	let delay = 800;
-	while (Date.now() - started < maxMs) {
-		signal?.throwIfAborted?.();
-		const run = await fetchJson(`${TASK_RUN_URL}/${encodeURIComponent(runId)}`, apiKey, {
-			method: "GET",
-			signal,
-			timeoutMs: 30000,
-		});
-		const status = run.status;
-		if (status === "completed" || status === "failed" || status === "cancelled") {
-			let result = null;
-			if (status === "completed") {
-				result = await fetchJson(`${TASK_RUN_URL}/${encodeURIComponent(runId)}/result`, apiKey, {
-					method: "GET",
-					signal,
-					timeoutMs: 60000,
-				});
+	let lastStatus;
+	try {
+		while (true) {
+			const remaining = deadlineAt - Date.now();
+			if (remaining <= 0) break;
+			if (signal?.aborted) {
+				throw asAbortError(signal.reason, "aborted");
 			}
-			return { run, result };
+			// Clamp each poll's fetch timeout to the remaining poll budget.
+			const fetchTimeout = Math.max(1, Math.min(30000, remaining));
+			const run = await fetchJson(`${TASK_RUN_URL}/${encodeURIComponent(runId)}`, apiKey, {
+				method: "GET",
+				signal,
+				timeoutMs: fetchTimeout,
+			});
+			const status = run.status;
+			lastStatus = status;
+			if (status === "completed" || status === "failed" || status === "cancelled") {
+				let result = null;
+				if (status === "completed") {
+					const resultRemaining = deadlineAt - Date.now();
+					if (resultRemaining <= 0) {
+						// Status is terminal-completed but budget exhausted before result fetch.
+						return { run, result: null };
+					}
+					const resultTimeout = Math.max(1, Math.min(60000, resultRemaining));
+					result = await fetchJson(`${TASK_RUN_URL}/${encodeURIComponent(runId)}/result`, apiKey, {
+						method: "GET",
+						signal,
+						timeoutMs: resultTimeout,
+					});
+				}
+				return { run, result };
+			}
+			const afterFetch = deadlineAt - Date.now();
+			if (afterFetch <= 0) break;
+			// Clamp sleep to remaining budget so we never overrun poll_timeout_ms.
+			const sleepMs = Math.min(delay, afterFetch);
+			await sleep(sleepMs, signal);
+			delay = Math.min(Math.floor(delay * 1.4), 5000);
 		}
-		await sleep(delay, signal);
-		delay = Math.min(Math.floor(delay * 1.4), 5000);
+		const timeoutError = new Error(`Parallel task ${runId} did not finish within ${maxMs}ms`);
+		attachOrphanedRun(timeoutError, runId, "poll-timeout");
+		throw timeoutError;
+	} catch (error) {
+		if (error?.orphanedRun) throw error;
+		const terminal =
+			lastStatus === "completed" || lastStatus === "failed" || lastStatus === "cancelled";
+		if (!terminal) {
+			const reason =
+				error?.name === "AbortError" ||
+				error?.name === "TimeoutError" ||
+				(error instanceof Error && /abort/i.test(error.message))
+					? "aborted"
+					: "poll-timeout";
+			attachOrphanedRun(error, runId, reason);
+		}
+		throw error;
 	}
-	throw new Error(`Parallel task ${runId} did not finish within ${maxMs}ms`);
 }
 
 /**
@@ -411,6 +685,8 @@ const factory = (host) => {
 			"operation=search (default): V1 Search. mode=turbo|basic|advanced (beta aliases fast/one-shot/agentic accepted).",
 			"operation=extract: pull excerpts/full content from known URLs.",
 			"operation=task: Deep Research / Task API with processor tiers (slower, more expensive, synthesizes an answer).",
+			"operation=task_status: retrieve an existing task run by run_id via GET /v1/tasks/runs/{run_id} (retryable, not billed as a new run); includes result when completed.",
+			"Task runs cannot be cancelled — the Parallel API has no cancel endpoint; a timed-out run keeps executing remotely. Use task_status to poll later.",
 			"For X/Twitter use x_search; for Exa semantic/deep indexes use exa_search.",
 		].join(" "),
 		parameters: z.object({
@@ -424,9 +700,9 @@ const factory = (host) => {
 				.optional()
 				.describe("Natural-language goal for Search/Extract/Task. Defaults to query."),
 			operation: z
-				.enum(["search", "extract", "task"])
+				.enum(["search", "extract", "task", "task_status"])
 				.optional()
-				.describe("search=V1 Search (default); extract=URL extract; task=Deep Research processor run."),
+				.describe("search=V1 Search (default); extract=URL extract; task=Deep Research processor run; task_status=GET existing run by run_id (not a new billed run)."),
 			mode: z
 				.enum([
 					"turbo",
@@ -485,13 +761,17 @@ const factory = (host) => {
 				.max(900000)
 				.optional()
 				.describe("Max time to wait for task completion (default 180000)."),
+			run_id: z
+				.string()
+				.min(1)
+				.optional()
+				.describe("For operation=task_status: existing Parallel task run_id to retrieve (GET, not billed as a new run)."),
 		}),
 
 		formatApprovalDetails(args) {
 			const a = args || {};
 			const operation = VALID_OPS.has(a.operation) ? a.operation : "search";
 			const lines = [`Operation: ${operation}${a.operation ? "" : " (default)"}`];
-
 			if (operation === "extract") {
 				const urls = Array.isArray(a.urls) ? a.urls.filter(Boolean) : [];
 				lines.push(`URLs: ${urls.length}`);
@@ -502,6 +782,11 @@ const factory = (host) => {
 				const focus = a.objective || a.query;
 				if (focus) lines.push(`Focus: ${focus}`);
 				if (a.session_id) lines.push(`Session: ${a.session_id}`);
+				return lines;
+			}
+
+			if (operation === "task_status") {
+				lines.push(`run_id: ${a.run_id || "(required)"}`);
 				return lines;
 			}
 
@@ -609,10 +894,22 @@ const factory = (host) => {
 					body.full_content = params.full_content === true;
 
 					const data = await fetchJson(EXTRACT_URL, auth.token, { body, signal, timeoutMs: 120000 });
-					const text = formatExtractForLLM(data);
+					const returned = Array.isArray(data.results) ? data.results.length : 0;
+					const pagination = buildPagination({
+						page: 1,
+						per_page: urls.length,
+						returned,
+						has_more: false,
+						continuation_supported: false,
+					});
+					const text = formatExtractForLLM(data, pagination, {
+						preferFullContent: params.full_content === true,
+					});
 					return {
 						content: [{ type: "text", text }],
 						details: {
+							pagination,
+							rawResponse: data,
 							response: {
 								provider: "parallel",
 								operation: "extract",
@@ -620,8 +917,63 @@ const factory = (host) => {
 								extractId: data.extract_id,
 								usage: data.usage,
 								warnings: data.warnings,
-								resultCount: Array.isArray(data.results) ? data.results.length : 0,
+								resultCount: returned,
 								errorCount: Array.isArray(data.errors) ? data.errors.length : 0,
+							},
+						},
+					};
+				}
+
+				if (operation === "task_status") {
+					const runId = asString(params.run_id);
+					if (!runId) {
+						return {
+							isError: true,
+							content: [
+								{
+									type: "text",
+									text: "Error: operation=task_status requires run_id.",
+								},
+							],
+						};
+					}
+					onUpdate?.({
+						content: [{ type: "text", text: `Parallel task_status ${runId}…` }],
+						details: { phase: "task_status", runId },
+					});
+					const run = await fetchJson(`${TASK_RUN_URL}/${encodeURIComponent(runId)}`, auth.token, {
+						method: "GET",
+						signal,
+						timeoutMs: 30000,
+					});
+					let result = null;
+					if (run.status === "completed") {
+						try {
+							result = await fetchJson(
+								`${TASK_RUN_URL}/${encodeURIComponent(runId)}/result`,
+								auth.token,
+								{ method: "GET", signal, timeoutMs: 60000 },
+							);
+						} catch {
+							// Status is authoritative; result is best-effort.
+							result = null;
+						}
+					}
+					const text = formatTaskForLLM(run, result);
+					const isError = run.status === "failed" || run.status === "cancelled";
+					return {
+						isError: isError || undefined,
+						content: [{ type: "text", text }],
+						details: {
+							response: {
+								provider: "parallel",
+								operation: "task_status",
+								authMode: auth.authMode,
+								runId,
+								status: run.status,
+								interactionId: run.interaction_id,
+								run,
+								output: result?.output,
 							},
 						},
 					};
@@ -670,7 +1022,14 @@ const factory = (host) => {
 						details: { phase: "task_create", processor },
 					});
 
-					const created = await fetchJson(TASK_RUN_URL, auth.token, { body, signal, timeoutMs: 60000 });
+					// POST /v1/tasks/runs is not idempotent: a lost response after accept would
+					// create a second billed run if retried, so disable transport retries here.
+					const created = await fetchJson(TASK_RUN_URL, auth.token, {
+						body,
+						signal,
+						timeoutMs: 60000,
+						retry: false,
+					});
 					const runId = created.run_id;
 					if (!runId) {
 						return {
@@ -690,39 +1049,63 @@ const factory = (host) => {
 						details: { phase: "task_poll", runId, processor },
 					});
 
-					const { run, result } = await pollTask(auth.token, runId, signal, pollMs);
-					const text = formatTaskForLLM(run, result);
-					const isError = run.status === "failed" || run.status === "cancelled";
-					return {
-						isError: isError || undefined,
-						content: [{ type: "text", text }],
-						details: {
-							response: {
-								provider: "parallel",
-								operation: "task",
-								authMode: auth.authMode,
-								processor,
-								runId,
-								status: run.status,
-								interactionId: run.interaction_id,
-								run,
-								output: result?.output,
+					try {
+						const { run, result } = await pollTask(auth.token, runId, signal, pollMs);
+						const text = formatTaskForLLM(run, result);
+						const isError = run.status === "failed" || run.status === "cancelled";
+						return {
+							isError: isError || undefined,
+							content: [{ type: "text", text }],
+							details: {
+								response: {
+									provider: "parallel",
+									operation: "task",
+									authMode: auth.authMode,
+									processor,
+									runId,
+									status: run.status,
+									interactionId: run.interaction_id,
+									run,
+									output: result?.output,
+								},
 							},
-						},
-					};
+						};
+					} catch (taskErr) {
+						const orphanedRun = taskErr?.orphanedRun;
+						if (taskErr && (taskErr.name === "AbortError" || taskErr.name === "TimeoutError")) {
+							if (orphanedRun) {
+								taskErr.details = { ...(taskErr.details || {}), orphanedRun };
+							}
+							throw taskErr;
+						}
+						const msg = taskErr instanceof Error ? taskErr.message : String(taskErr);
+						return {
+							isError: true,
+							content: [{ type: "text", text: `Error: ${msg}` }],
+							details: orphanedRun ? { orphanedRun } : undefined,
+						};
+					}
 				}
 
 				// search
 				const { body, mode, queries, objective } = buildSearchBody(params);
+				const maxResults = body.advanced_settings?.max_results ?? 10;
 				const data = await fetchJson(SEARCH_URL, auth.token, {
 					body,
 					signal,
 					timeoutMs: mode === "advanced" ? 120000 : 60000,
 				});
-				const { text, sources } = formatSearchForLLM(data, { mode, queries, objective });
+				const sourcesPreview = extractSearchSources(data);
+				const pagination = buildPagination({
+					page: 1,
+					per_page: maxResults,
+					returned: sourcesPreview.length,
+				});
+				const { text, sources } = formatSearchForLLM(data, { mode, queries, objective }, pagination);
 				return {
 					content: [{ type: "text", text }],
 					details: {
+						pagination,
 						response: {
 							provider: "parallel",
 							operation: "search",
@@ -741,10 +1124,11 @@ const factory = (host) => {
 			} catch (err) {
 				if (err && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
 				const msg = err instanceof Error ? err.message : String(err);
-				return { isError: true, content: [{ type: "text", text: `Error: ${msg}` }] };
+				const details = err?.orphanedRun ? { orphanedRun: err.orphanedRun } : undefined;
+				return { isError: true, content: [{ type: "text", text: `Error: ${msg}` }], details };
 			}
 		},
 	};
-};
+}
 
 export default factory;

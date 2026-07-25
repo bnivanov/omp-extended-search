@@ -111,16 +111,59 @@ function statusGuidance(status) {
 	return undefined;
 }
 
-async function fetchSearch(url, apiKey, body, signals, apiTimeoutMs) {
+const RETRY_MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 8000;
+// Billed POST /v2/search: omit 500 — server may have accepted and billed the search.
+const RETRYABLE_STATUS = new Set([408, 425, 429, 502, 503, 504]);
+
+function asAbortError(reason, fallbackMessage) {
+	if (reason && typeof reason === "object" && (reason.name === "AbortError" || reason.name === "TimeoutError")) return reason;
+	const error = new Error(reason instanceof Error ? reason.message : (fallbackMessage || "aborted"));
+	error.name = "AbortError";
+	if (reason !== undefined) error.cause = reason;
+	return error;
+}
+
+function retryDelayMs(attempt, retryAfterHeader) {
+	const raw = typeof retryAfterHeader === "string" ? retryAfterHeader.trim() : "";
+	if (raw) {
+		const seconds = Number.parseFloat(raw);
+		if (Number.isFinite(seconds) && seconds >= 0) return { delayMs: seconds * 1000, fromHeader: true };
+		const at = Date.parse(raw);
+		if (Number.isFinite(at)) return { delayMs: Math.max(at - Date.now(), 0), fromHeader: true };
+	}
+	const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+	return { delayMs: Math.round(backoff * (0.5 + Math.random() * 0.5)), fromHeader: false };
+}
+
+function sleepWithAbort(ms, signal) {
+	const { promise, resolve, reject } = Promise.withResolvers();
+	if (signal?.aborted) {
+		reject(asAbortError(signal.reason, "aborted"));
+		return promise;
+	}
+	const timer = setTimeout(() => {
+		signal?.removeEventListener?.("abort", onAbort);
+		resolve(undefined);
+	}, ms);
+	const onAbort = () => {
+		clearTimeout(timer);
+		reject(asAbortError(signal?.reason, "aborted"));
+	};
+	signal?.addEventListener?.("abort", onAbort, { once: true });
+	return promise;
+}
+
+async function fetchSearch(url, apiKey, body, signals, apiTimeoutMs, onUpdate) {
 	const controller = new AbortController();
 	const externalSignals = [...new Set(signals.filter(Boolean))];
 	const listeners = [];
+	const deadlineAt = Date.now() + apiTimeoutMs + Math.min(5000, Math.max(1000, Math.ceil(apiTimeoutMs * 0.1)));
 
 	for (const externalSignal of externalSignals) {
 		const onAbort = () => {
-			const error = new Error("Firecrawl request aborted");
-			error.name = "AbortError";
-			controller.abort(error);
+			controller.abort(asAbortError(externalSignal.reason, "Firecrawl request aborted"));
 		};
 		if (externalSignal.aborted) {
 			onAbort();
@@ -141,30 +184,86 @@ async function fetchSearch(url, apiKey, body, signals, apiTimeoutMs) {
 	const headers = { "Content-Type": "application/json" };
 	if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-	try {
-		const response = await globalThis.fetch(url, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-			signal: controller.signal,
-		});
-		const text = await response.text();
-		let data;
-		try {
-			data = text ? JSON.parse(text) : {};
-		} catch {
-			data = { raw: text };
-		}
+	const rethrowIfAborted = (error) => {
+		if (error && (error.name === "AbortError" || error.name === "TimeoutError")) throw asAbortError(error, "aborted");
+		if (controller.signal.aborted) throw asAbortError(controller.signal.reason, "aborted");
+	};
 
-		if (!response.ok || data?.success === false) {
-			const detail = apiErrorDetail(data, text);
-			const guidance = statusGuidance(response.status);
-			const code = detail.code ? `, code ${detail.code}` : "";
-			throw new Error(
-				`Firecrawl API error (HTTP ${response.status}${code}): ${detail.message}${guidance ? ` Guidance: ${guidance}` : ""}`,
-			);
+	try {
+		let lastError;
+		for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+			let response;
+			try {
+				response = await globalThis.fetch(url, {
+					method: "POST",
+					headers,
+					body: JSON.stringify(body),
+					signal: controller.signal,
+				});
+			} catch (error) {
+				rethrowIfAborted(error);
+				lastError = error instanceof Error ? error : new Error(String(error));
+				if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+					const { delayMs, fromHeader } = retryDelayMs(attempt, undefined);
+					const remaining = deadlineAt - Date.now();
+					if (fromHeader && delayMs > remaining) {
+						throw new Error(
+							`${lastError.message} — server asked for ${Math.ceil(delayMs / 1000)}s but only ${Math.max(0, Math.ceil(remaining / 1000))}s of the request budget remains; not retried.`,
+						);
+					}
+					if (delayMs > remaining) {
+						throw new Error(`${lastError.message} — retry backoff exceeds remaining request budget; not retried.`);
+					}
+					onUpdate?.({
+						content: [{ type: "text", text: `Firecrawl network error; retrying (attempt ${attempt + 2}/${RETRY_MAX_ATTEMPTS}) after ${delayMs}ms…` }],
+						details: { phase: "retry", attempt: attempt + 2 },
+					});
+					// S1: always sleep against internal controller (mirrors caller + timeout)
+					await sleepWithAbort(delayMs, controller.signal);
+					continue;
+				}
+				const suffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : "";
+				throw new Error(`${lastError.message}${suffix}`);
+			}
+
+			const text = await response.text();
+			let data;
+			try {
+				data = text ? JSON.parse(text) : {};
+			} catch {
+				data = { raw: text };
+			}
+
+			if (!response.ok || data?.success === false) {
+				const detail = apiErrorDetail(data, text);
+				const guidance = statusGuidance(response.status);
+				const code = detail.code ? `, code ${detail.code}` : "";
+				const msg = `Firecrawl API error (HTTP ${response.status}${code}): ${detail.message}${guidance ? ` Guidance: ${guidance}` : ""}`;
+				// 402 must not retry; billed POST retries only RETRYABLE_STATUS (no 500).
+				if (RETRYABLE_STATUS.has(response.status) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+					const { delayMs, fromHeader } = retryDelayMs(attempt, response.headers?.get?.("retry-after"));
+					const remaining = deadlineAt - Date.now();
+					if (fromHeader && delayMs > remaining) {
+						throw new Error(
+							`${msg} — server asked for ${Math.ceil(delayMs / 1000)}s but only ${Math.max(0, Math.ceil(remaining / 1000))}s of the request budget remains; not retried.`,
+						);
+					}
+					if (delayMs > remaining) {
+						throw new Error(`${msg} — retry backoff exceeds remaining request budget; not retried.`);
+					}
+					onUpdate?.({
+						content: [{ type: "text", text: `Firecrawl HTTP ${response.status}; retrying (attempt ${attempt + 2}/${RETRY_MAX_ATTEMPTS}) after ${delayMs}ms…` }],
+						details: { phase: "retry", attempt: attempt + 2 },
+					});
+					await sleepWithAbort(delayMs, controller.signal);
+					continue;
+				}
+				const suffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : "";
+				throw new Error(`${msg}${suffix}`);
+			}
+			return data;
 		}
-		return data;
+		throw lastError ?? new Error("Firecrawl request failed");
 	} finally {
 		clearTimeout(timer);
 		for (const [externalSignal, onAbort] of listeners) {
@@ -241,7 +340,7 @@ function renderImageItem(item, index) {
 	return lines;
 }
 
-function formatResults(response, content, requestedSources) {
+function formatResults(response, content, requestedSources, pagination) {
 	const groups = normalizeGroups(response);
 	const lines = ["# Firecrawl advanced search"];
 	const warning = response?.warning ?? response?.data?.warning;
@@ -272,8 +371,36 @@ function formatResults(response, content, requestedSources) {
 			);
 		}
 	}
+
+	if (pagination) {
+		const returned = pagination.returned;
+		const perPage = pagination.per_page;
+		const perSource = pagination.per_source || {};
+		const truncatedSources = Array.isArray(pagination.truncated_sources)
+			? pagination.truncated_sources
+			: [];
+		const sourceBits = Object.keys(perSource).length
+			? Object.entries(perSource)
+					.map(([name, count]) => `${name}=${count}`)
+					.join(", ")
+			: null;
+		const base =
+			sourceBits != null
+				? `Showing ${returned} results total (${sourceBits}; per-source limit ${perPage})`
+				: `Showing ${returned} results (per-source limit ${perPage})`;
+		if (truncatedSources.length > 0) {
+			lines.push(
+				"",
+				`${base} — truncated at the per-source limit for: ${truncatedSources.join(", ")}. This tool has no pagination; raise limit or narrow the query to see more.`,
+			);
+		} else {
+			lines.push("", `${base}.`);
+		}
+	}
+
 	return lines.join("\n").trimEnd();
 }
+
 
 const factory = (host: CustomToolFactoryHost) => {
 	const z = host.zod;
@@ -382,9 +509,29 @@ const factory = (host: CustomToolFactoryHost) => {
 					details: { phase: "start", provider: "firecrawl", authenticated: Boolean(auth.token), authMode: auth.authMode },
 				});
 
-				const rawResponse = await fetchSearch(url, auth.token, body, [signal, ctx?.signal], timeoutMs);
+				const rawResponse = await fetchSearch(url, auth.token, body, [signal, ctx?.signal], timeoutMs, onUpdate);
+				const groups = normalizeGroups(rawResponse);
+				const perPage = body.limit ?? DEFAULT_LIMIT;
+				const perSource = {
+					web: groups.web.length,
+					news: groups.news.length,
+					images: groups.images.length,
+				};
+				// Aggregate is a display total only — never compare it to the per-source limit.
+				const returned = sources.reduce((n, s) => n + (perSource[s] ?? 0), 0);
+				const truncated_sources = sources.filter((s) => (perSource[s] ?? 0) >= perPage);
+				const pagination = {
+					page: 1,
+					per_page: perPage,
+					returned,
+					// No page/cursor param — report truncation, not has_more (P).
+					has_more: false,
+					continuation_supported: false,
+					truncated_sources,
+					per_source: Object.fromEntries(sources.map((s) => [s, perSource[s] ?? 0])),
+				};
 				return {
-					content: [{ type: "text", text: formatResults(rawResponse, content, sources) }],
+					content: [{ type: "text", text: formatResults(rawResponse, content, sources, pagination) }],
 					details: {
 						request: {
 							provider: "firecrawl",
@@ -395,6 +542,7 @@ const factory = (host: CustomToolFactoryHost) => {
 							body,
 						},
 						rawResponse,
+						pagination,
 					},
 				};
 			} catch (error) {

@@ -31,6 +31,7 @@ const CAPTURE_UA =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 const CAPTURE_TIMEOUT_MS = 8000;
 const FIRECRAWL_TIMEOUT_MS = 30000;
+const XAI_TIMEOUT_MS = 120_000;
 const CAPTURE_CONCURRENCY = 6;
 const FIRECRAWL_MAX_CHARS = 1200;
 const STATUS_RE = /(?:x|twitter)\.com\/[^/]+\/status\/(\d+)/i;
@@ -160,7 +161,23 @@ function renderCaptured(cap) {
 	return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
-function formatForLLM(answer, sources) {
+function formatPaginationLine(pagination) {
+	const returned = pagination.returned;
+	const perPage = pagination.per_page;
+	const total =
+		pagination.upstream_total != null ? String(pagination.upstream_total) : null;
+	const truncated = pagination.truncated === true || (pagination.has_more === true && pagination.continuation_supported === false);
+	const base =
+		total != null
+			? `Showing ${returned} of ${total} results (requested limit ${perPage})`
+			: `Showing ${returned} results (requested limit ${perPage})`;
+	if (truncated || pagination.has_more) {
+		return `${base} — the result set may be truncated; this tool has no pagination, so raise the limit or narrow the query to see more.`;
+	}
+	return `${base}.`;
+}
+
+function formatForLLM(answer, sources, pagination) {
 	const out = [];
 	if (answer) {
 		out.push(answer);
@@ -172,6 +189,9 @@ function formatForLLM(answer, sources) {
 		const rendered = renderCaptured(s.captured);
 		if (rendered) out.push(rendered);
 	});
+	if (pagination) {
+		out.push("", formatPaginationLine(pagination));
+	}
 	return out.join("\n");
 }
 
@@ -190,16 +210,117 @@ function syndicationToken(id) {
 	return ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, "");
 }
 
-async function fetchWithTimeout(url, init, signal, timeoutMs = CAPTURE_TIMEOUT_MS) {
+const RETRY_MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 8000;
+// Billed POSTs (xAI responses, Firecrawl capture scrape): no 500 — server may have accepted/billed. Capture GETs keep 500 via RETRYABLE_STATUS_GET.
+const RETRYABLE_STATUS_BILLED = new Set([408, 425, 429, 502, 503, 504]);
+const RETRYABLE_STATUS_GET = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function asAbortError(reason, fallbackMessage) {
+	if (reason && typeof reason === "object" && (reason.name === "AbortError" || reason.name === "TimeoutError")) return reason;
+	const error = new Error(reason instanceof Error ? reason.message : (fallbackMessage || "aborted"));
+	error.name = "AbortError";
+	if (reason !== undefined) error.cause = reason;
+	return error;
+}
+
+function retryDelayMs(attempt, retryAfterHeader) {
+	const raw = typeof retryAfterHeader === "string" ? retryAfterHeader.trim() : "";
+	if (raw) {
+		const seconds = Number.parseFloat(raw);
+		if (Number.isFinite(seconds) && seconds >= 0) return { delayMs: seconds * 1000, fromHeader: true };
+		const at = Date.parse(raw);
+		if (Number.isFinite(at)) return { delayMs: Math.max(at - Date.now(), 0), fromHeader: true };
+	}
+	const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+	return { delayMs: Math.round(backoff * (0.5 + Math.random() * 0.5)), fromHeader: false };
+}
+
+function sleepWithAbort(ms, signal) {
+	const { promise, resolve, reject } = Promise.withResolvers();
+	if (signal?.aborted) {
+		reject(asAbortError(signal.reason, "aborted"));
+		return promise;
+	}
+	const timer = setTimeout(() => {
+		signal?.removeEventListener?.("abort", onAbort);
+		resolve(undefined);
+	}, ms);
+	const onAbort = () => {
+		clearTimeout(timer);
+		reject(asAbortError(signal?.reason, "aborted"));
+	};
+	signal?.addEventListener?.("abort", onAbort, { once: true });
+	return promise;
+}
+
+async function fetchWithTimeout(url, init, signal, timeoutMs = CAPTURE_TIMEOUT_MS, opts = {}) {
+	const billed = opts.billed === true;
+	const retryable = billed ? RETRYABLE_STATUS_BILLED : RETRYABLE_STATUS_GET;
 	const ctrl = new AbortController();
-	const timer = setTimeout(() => ctrl.abort(new DOMException("capture timeout", "TimeoutError")), timeoutMs);
-	const onAbort = () => ctrl.abort();
+	const deadlineAt = Date.now() + timeoutMs;
+	const timer = setTimeout(
+		() => ctrl.abort(Object.assign(new Error("capture timeout"), { name: "TimeoutError" })),
+		timeoutMs,
+	);
+	const onAbort = () => ctrl.abort(signal?.reason !== undefined ? signal.reason : asAbortError(undefined, "aborted"));
 	if (signal) {
-		if (signal.aborted) ctrl.abort();
+		if (signal.aborted) onAbort();
 		else signal.addEventListener("abort", onAbort, { once: true });
 	}
+
+	const rethrowIfAborted = (error) => {
+		if (error && (error.name === "AbortError" || error.name === "TimeoutError")) throw asAbortError(error, "aborted");
+		if (ctrl.signal.aborted) throw asAbortError(ctrl.signal.reason, "aborted");
+	};
+
 	try {
-		return await fetch(url, { ...init, signal: ctrl.signal });
+		let lastError;
+		for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+			let res;
+			try {
+				res = await fetch(url, { ...init, signal: ctrl.signal });
+			} catch (error) {
+				rethrowIfAborted(error);
+				lastError = error instanceof Error ? error : new Error(String(error));
+				if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+					const { delayMs, fromHeader } = retryDelayMs(attempt, undefined);
+					const remaining = deadlineAt - Date.now();
+					if (fromHeader && delayMs > remaining) {
+						throw new Error(
+							`${lastError.message} — server asked for ${Math.ceil(delayMs / 1000)}s but only ${Math.max(0, Math.ceil(remaining / 1000))}s of the request budget remains; not retried.`,
+						);
+					}
+					if (delayMs > remaining) {
+						throw new Error(`${lastError.message} — retry backoff exceeds remaining request budget; not retried.`);
+					}
+					await sleepWithAbort(delayMs, ctrl.signal);
+					continue;
+				}
+				const suffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : "";
+				const err = new Error(`${lastError.message}${suffix}`);
+				err.name = lastError.name;
+				throw err;
+			}
+
+			if (!res.ok && retryable.has(res.status) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+				const { delayMs, fromHeader } = retryDelayMs(attempt, res.headers?.get?.("retry-after"));
+				const remaining = deadlineAt - Date.now();
+				if (fromHeader && delayMs > remaining) {
+					throw new Error(
+						`HTTP ${res.status} — server asked for ${Math.ceil(delayMs / 1000)}s but only ${Math.max(0, Math.ceil(remaining / 1000))}s of the request budget remains; not retried.`,
+					);
+				}
+				if (delayMs > remaining) {
+					throw new Error(`HTTP ${res.status} — retry backoff exceeds remaining request budget; not retried.`);
+				}
+				await sleepWithAbort(delayMs, ctrl.signal);
+				continue;
+			}
+			return res;
+		}
+		throw lastError ?? new Error(`Failed to fetch ${url}`);
 	} finally {
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", onAbort);
@@ -239,6 +360,7 @@ async function captureViaFirecrawl(url, signal) {
 		},
 		signal,
 		FIRECRAWL_TIMEOUT_MS,
+		{ billed: true },
 	);
 	if (!res.ok) return { error: `firecrawl HTTP ${res.status}` };
 	const data = await res.json();
@@ -284,7 +406,7 @@ export default function xSearchToolFactory(api) {
 		"reasoning_effort?": "'low' | 'medium' | 'high'",
 		"focus?": "'relevance' | 'volume'",
 		"recency?": "'day' | 'week' | 'month' | 'year'",
-		"limit?": "number",
+		"limit?": "1 <= number <= 30",
 		"allowed_handles?": "string[]",
 		"excluded_handles?": "string[]",
 		"from_date?": "string",
@@ -354,16 +476,78 @@ export default function xSearchToolFactory(api) {
 				if (typeof params.temperature === "number") body.temperature = params.temperature;
 
 				const fetchImpl = ctx?.fetch ?? fetch;
-				const res = await fetchImpl(XAI_RESPONSES_URL, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${auth.token}`,
-					},
-					body: JSON.stringify(body),
-					redirect: "error",
-					signal,
-				});
+				const xaiCtrl = new AbortController();
+				const xaiDeadlineAt = Date.now() + XAI_TIMEOUT_MS;
+				const xaiTimer = setTimeout(
+					() => xaiCtrl.abort(Object.assign(new Error(`xAI Responses request timed out after ${XAI_TIMEOUT_MS}ms`), { name: "TimeoutError" })),
+					XAI_TIMEOUT_MS,
+				);
+				const onCallerAbort = () =>
+					xaiCtrl.abort(signal?.reason !== undefined ? signal.reason : asAbortError(undefined, "aborted"));
+				if (signal) {
+					if (signal.aborted) onCallerAbort();
+					else signal.addEventListener("abort", onCallerAbort, { once: true });
+				}
+
+				let res;
+				let lastFetchError;
+				try {
+					for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+						try {
+							res = await fetchImpl(XAI_RESPONSES_URL, {
+								method: "POST",
+								headers: {
+									"Content-Type": "application/json",
+									Authorization: `Bearer ${auth.token}`,
+								},
+								body: JSON.stringify(body),
+								redirect: "error",
+								signal: xaiCtrl.signal,
+							});
+						} catch (error) {
+							if (error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+								throw asAbortError(error, "aborted");
+							}
+							if (xaiCtrl.signal.aborted) throw asAbortError(xaiCtrl.signal.reason, "aborted");
+							lastFetchError = error instanceof Error ? error : new Error(String(error));
+							if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+								const { delayMs, fromHeader } = retryDelayMs(attempt, undefined);
+								const remaining = xaiDeadlineAt - Date.now();
+								if (fromHeader && delayMs > remaining) {
+									throw new Error(
+										`${lastFetchError.message} — server asked for ${Math.ceil(delayMs / 1000)}s but only ${Math.max(0, Math.ceil(remaining / 1000))}s of the request budget remains; not retried.`,
+									);
+								}
+								if (delayMs > remaining) {
+									throw new Error(`${lastFetchError.message} — retry backoff exceeds remaining request budget; not retried.`);
+								}
+								await sleepWithAbort(delayMs, xaiCtrl.signal);
+								continue;
+							}
+							const suffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : "";
+							throw new Error(`${lastFetchError.message}${suffix}`);
+						}
+
+						if (!res.ok && RETRYABLE_STATUS_BILLED.has(res.status) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+							const { delayMs, fromHeader } = retryDelayMs(attempt, res.headers?.get?.("retry-after"));
+							const remaining = xaiDeadlineAt - Date.now();
+							if (fromHeader && delayMs > remaining) {
+								throw new Error(
+									`HTTP ${res.status} — server asked for ${Math.ceil(delayMs / 1000)}s but only ${Math.max(0, Math.ceil(remaining / 1000))}s of the request budget remains; not retried.`,
+								);
+							}
+							if (delayMs > remaining) {
+								throw new Error(`HTTP ${res.status} — retry backoff exceeds remaining request budget; not retried.`);
+							}
+							await sleepWithAbort(delayMs, xaiCtrl.signal);
+							continue;
+						}
+						break;
+					}
+				} finally {
+					clearTimeout(xaiTimer);
+					signal?.removeEventListener("abort", onCallerAbort);
+				}
 
 				if (!res.ok) {
 					const errText = await res.text();
@@ -400,21 +584,48 @@ export default function xSearchToolFactory(api) {
 				const xCalls = response?.usage?.server_side_tool_usage_details?.x_search_calls ?? 0;
 
 				if (capped.length === 0 && !answer) {
+					const pagination = { page: 1, per_page: cap, returned: 0, has_more: false, continuation_supported: false };
 					const text =
 						xCalls > 0
 							? "X search ran but returned no citations. Results may be incomplete."
 							: "X search returned no results.";
-					return { content: [{ type: "text", text }] };
+					const showing = formatPaginationLine(pagination);
+					return {
+						content: [{ type: "text", text: `${text}\n\n${showing}` }],
+						details: { pagination },
+					};
 				}
 
-				let captureProvider;
+				let captureMeta;
+				let captureNote = "";
 				if (params.capture && capped.length > 0) {
-					captureProvider =
-						params.capture_provider === "firecrawl" && process.env.FIRECRAWL_API_KEY ? "firecrawl" : "syndication";
-					await captureSources(capped, captureProvider, signal);
+					const requested =
+						params.capture_provider === "firecrawl" ? "firecrawl" : "syndication";
+					let used = requested;
+					let reason;
+					if (requested === "firecrawl" && !process.env.FIRECRAWL_API_KEY) {
+						used = "syndication";
+						reason = "FIRECRAWL_API_KEY not set; fell back to syndication";
+						captureNote = `Capture provider fallback: requested firecrawl but ${reason}.`;
+					}
+					captureMeta = { requested, used, reason };
+					await captureSources(capped, used, signal);
 				}
 
-				const text = formatForLLM(answer, capped) || "X search returned no renderable content.";
+				const truncated = sources.length > cap;
+				const pagination = {
+					page: 1,
+					per_page: cap,
+					returned: capped.length,
+					// No page/cursor param — never claim has_more when continuation is unsupported (P).
+					// Truncation is derived from the pre-cap source count, not returned >= cap.
+					has_more: false,
+					continuation_supported: false,
+					truncated,
+					upstream_total: truncated ? sources.length : undefined,
+				};
+				let text = formatForLLM(answer, capped, pagination) || "X search returned no renderable content.";
+				if (captureNote) text = `${captureNote}\n\n${text}`;
 				return {
 					content: [{ type: "text", text }],
 					details: {
@@ -427,14 +638,18 @@ export default function xSearchToolFactory(api) {
 							requestId: response?.id,
 							answer,
 							sources: capped,
-							capture: captureProvider
+							capture: captureMeta
 								? {
-										provider: captureProvider,
+										requested: captureMeta.requested,
+										used: captureMeta.used,
+										reason: captureMeta.reason,
+										provider: captureMeta.used,
 										captured: capped.filter((s) => s.captured && !s.captured.error).length,
 										total: capped.length,
 									}
 								: undefined,
 						},
+						pagination,
 					},
 				};
 			} catch (err) {

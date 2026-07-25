@@ -22,7 +22,7 @@ The model fills these; you rarely set them by hand.
 | `reasoning_effort` | `low` \| `medium` \| `high` | Depth vs latency. Default `high`. |
 | `focus` | `relevance` \| `volume` | `relevance` (default) favors the best posts; `volume` broadens coverage across handles/viewpoints. |
 | `recency` | `day` \| `week` \| `month` \| `year` | Convenience window; maps to `from_date`. |
-| `limit` | number | Max citations returned. Default `10`, capped at `30`. |
+| `limit` | number | Max citations returned. Default `10`. Schema-constrained to **1–30** (the real maximum) — values above 30 are rejected by the schema rather than silently capped. |
 | `allowed_handles` | string[] | Restrict to these handles (max 20). Mutually exclusive with `excluded_handles`. |
 | `excluded_handles` | string[] | Exclude these handles (max 20). |
 | `from_date` / `to_date` | `YYYY-MM-DD` | Explicit date range. |
@@ -47,9 +47,13 @@ In practice, on a pointed question (`relevance`) you get fewer sources but more 
 By default the tool returns Grok's synthesized answer plus permalinks — the citations carry no raw post text (xAI leaves `cited_text` empty). Pass `capture: true` and every cited permalink is resolved to the real post, inlined under each source:
 
 - **`syndication`** (default, free, ~200–400ms/post) — via `cdn.syndication.twimg.com`. Post text, author, likes, replies, plus the quoted tweet. No API key, no credits.
-- **`firecrawl`** (~3–8s/post, spends Firecrawl credits) — adds retweets and top-comment threads. Needs `FIRECRAWL_API_KEY`; falls back to `syndication` when the key is absent.
+- **`firecrawl`** (~3–8s/post, spends Firecrawl credits) — adds retweets and top-comment threads. Needs `FIRECRAWL_API_KEY`. If you request `capture_provider: "firecrawl"` without that credential, the tool **falls back to syndication and says so** — a leading note in the text output plus `details.response.capture = { requested, used, reason }` (it no longer downgrades silently).
 
 Capture runs in parallel (6 at a time) and is best-effort: deleted or protected posts are annotated `⚠ capture: ...` and the rest still come back.
+
+## Pagination & timeouts
+
+There is no page/cursor parameter (`continuation_supported: false`). `limit` caps how many citations are returned; when Grok cited more than `limit`, the trailing line notes truncation and tells you to raise the limit or narrow the query. The main xAI Responses request has its **own 120s timeout** (separate from per-post capture timeouts), and that deadline interrupts retry backoff. Billed POSTs (xAI + Firecrawl capture) retry `408` / `425` / `429` / `502` / `503` / `504` plus transport errors — **not `500`**. Syndication GETs still retry `500`. Aborts normalize to `AbortError`.
 
 ## Model & effort guidance
 
