@@ -177,7 +177,7 @@ re-checked adversarially. Claims here are about what the code does, not what the
 
 | Limitation | Detail |
 |---|---|
-| No authenticated crawling | Firecrawl sends no cookies or session. Anything behind a login needs the `xd://browser` device, driven per-investigation. No tool here can reach it. |
+| No authenticated crawling | Firecrawl sends no cookies or session. Anything behind a login needs the `xd://browser` device, driven per-investigation. No tool here can reach it. Worked example: [examples/authenticated-ux-crawl](examples/authenticated-ux-crawl) — 22 screens of a logged-in app, reviewed by parallel agents. |
 | Parallel task runs cannot be cancelled | Verified against the live API: `DELETE /v1/tasks/runs/{id}` → 405, and `POST …/cancel` returns the generic router 404, not Parallel's structured error body. There is no cancel endpoint. A timed-out run keeps executing and billing; the tool now surfaces `details.orphanedRun` with the run id and an `operation: "task_status"` to retrieve it later. |
 | No per-call spend guard | Exa `deep`, Parallel processors, and `firecrawl_crawl` can each run up cost. Cost is reported after the fact (`costDollars`, `creditsUsed`); nothing refuses a call for being too expensive. The plan-first gate is the current control. |
 | Exa / Parallel / X / Firecrawl search cannot paginate | Their APIs expose no page or cursor on these endpoints. These tools report truncation honestly rather than advertising a page you cannot request — raise the limit or narrow the query. |

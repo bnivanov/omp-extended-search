@@ -1,0 +1,1642 @@
+{
+  "target": "https://app.raft.build",
+  "captured": "2026-07-26",
+  "method": "xd://browser authenticated crawl -> 4 parallel review agents (designer x3, reviewer x1)",
+  "screens_captured": 22,
+  "counts": {
+    "blocker": 7,
+    "high": 42,
+    "medium": 51,
+    "low": 19
+  },
+  "findings": [
+    {
+      "id": "accessibility-001",
+      "cluster": "accessibility",
+      "severity": "blocker",
+      "screens": [
+        "07-settings",
+        "17-server-profile",
+        "19-administration",
+        "20-applications"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 3.3.2 Labels or Instructions (A); 1.3.1 Info and Relationships (A)",
+      "title": "Text inputs in Account, Server Profile and Administration have no accessible name",
+      "evidence": "07-settings.aria.txt: `generic [ref=e145]: Display Name` / `textbox [ref=e146]: Bobby Ivanov`, `generic [ref=e148]: Username` / `textbox [ref=e151]: bobby-ivanov`. 17-server-profile.aria.txt: `generic [ref=e144]: Name` / `textbox [ref=e145]: raft-bobby-test`, `generic [ref=e147]: Slug` / `textbox [ref=e150]: raft-bobby-test`. 19-administration.aria.txt: `combobox [disabled] [ref=e135]`, `textbox [disabled] [ref=e141]: admin`, `combobox [ref=e314]`, `textbox [ref=e320]: 06e3d009-7002-44ee-98db-9ef19a4ba294`, `combobox [ref=e326]`, `textbox [ref=e332]: \"yes\"`. 20-applications.aria.txt: `textbox [ref=e156]: all`. The 07-settings.png screenshot confirms visible labels 'Display Name' / 'Username' / 'Email' are rendered directly above each field, so the text exists but is not programmatically associated.",
+      "recommendation": "Render the visible label text in a `<label for>` (or wire `aria-labelledby` to the existing generic). Apply the same fix to every combobox/textbox pair in Administration — those are the shadow inputs of a custom select and must inherit the group's label (e.g. 'Human Onboarding Agent', 'New Agent Greeting', 'Role')."
+    },
+    {
+      "id": "accessibility-002",
+      "cluster": "accessibility",
+      "severity": "blocker",
+      "screens": [
+        "07-settings",
+        "17-server-profile"
+      ],
+      "category": "2.1.1 Keyboard (A); 4.1.2 Name, Role, Value (A)",
+      "title": "Avatar upload control is a non-focusable generic, not a button",
+      "evidence": "07-settings.aria.txt: `generic \"Upload image\" [ref=e130]:` containing `img [ref=e132]` and `img [ref=e136]`. 17-server-profile.aria.txt: `generic \"Upload image\" [ref=e132]:` containing `generic [ref=e133]: R` and `img [ref=e135]`. The node carries an aria-label but role `generic` — it is not in the tab order and exposes no button role. 07-settings.png shows the avatar tile is the only affordance for changing the profile image.",
+      "recommendation": "Change the wrapper to `<button type=\"button\" aria-label=\"Upload profile image\">` (or a visually-hidden `<input type=\"file\">` with a real `<label>`), so it is focusable, Enter/Space-activatable, and announced with a button role."
+    },
+    {
+      "id": "accessibility-003",
+      "cluster": "accessibility",
+      "severity": "blocker",
+      "screens": [
+        "02-activity"
+      ],
+      "category": "2.1.1 Keyboard (A); 4.1.2 Name, Role, Value (A)",
+      "title": "'Double-click to jump to the next unread item' is a mouse-only interaction on a generic",
+      "evidence": "02-activity.aria.txt: `generic \"Double-click to jump to the next unread item\" [ref=e49]:` wrapping `img [ref=e51]` and a second, identically-labelled `generic \"Double-click to jump to the next unread item\" [ref=e53]:` which in turn wraps `heading \"Activity\" [level=2] [ref=e55]`. No button role, no tabindex, and the only documented activation is a double-click — which has no keyboard equivalent.",
+      "recommendation": "Expose a real `<button>` for 'Jump to next unread item' that responds to click/Enter/Space, and remove the duplicated aria-label from the outer wrapper so the heading is not announced twice with the same instruction prefix."
+    },
+    {
+      "id": "chat-004",
+      "cluster": "chat",
+      "severity": "blocker",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "14-create-channel"
+      ],
+      "category": "feedback-state",
+      "title": "Agent is Offline, but the messaging surface never says so and never blocks or warns on send",
+      "evidence": "Cindy is offline everywhere in the data model — sidebar `button \"Cindy Onboarding Assistant Offline\" [ref=e116]`, nav `generic \"Computers need attention: 1 offline\"`, and an `Offline` node on all 9 of her message avatars (01:110, 119, 133, …). Yet the conversation surface renders none of it: zoomed inspection of the two message-list avatars confirms \"No status dot overlaid on either of the two square pixel-art avatars\" and \"The word 'Offline' is not rendered as visible text anywhere in the main message list area.\" The composer is fully live (`textbox \"Message #onboarding-owner\" [active] [ref=e1170]`), and in 14 with `@Cindy` typed the Send button is enabled (`button \"Send\" [ref=e1188]`). The only sighted cue is a ~10px solid grey dot beside a truncated sidebar label `Cindy Onboarding Assist...`, with no legend. The channel header, composer, and every message are silent.",
+      "recommendation": "Put the state where the action is. When the only agent in a channel is offline, render a persistent strip directly above the composer: \"Cindy is offline — the raft-computer daemon on this machine isn't reachable. Messages will queue until it reconnects.\" plus a `Reconnect` / `View computer` action wired to the same target as the Computers nav item. Show a grey presence dot on the avatar of the newest message only (not history), with an accessible `title`. If messages genuinely queue, say so and mark the sent message `Queued`; if they are dropped, disable Send and say why."
+    },
+    {
+      "id": "chat-005",
+      "cluster": "chat",
+      "severity": "blocker",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "10-thread"
+      ],
+      "category": "accessibility",
+      "title": "Reply-in-thread, react, and save exist only on pointer hover — no keyboard or touch path",
+      "evidence": "The strings `Reply in thread`, `Add Reaction`, and `Save Message` occur exactly once across all six ARIA snapshots — in 10-thread.aria.txt:122-127, on the single message under the mouse: `button \"Reply in thread\" [ref=e332]`, `button \"Add Reaction\" [ref=e335]`, `button \"Save Message\" [ref=e339]`. In the at-rest channel snapshots (01 and 09, byte-identical, md5 0d756dcec4cb8465a6011724509a95f8) those strings do not appear at all — the toolbar is absent from the accessibility tree, not merely visually hidden. Visual inspection confirms the toolbar is a 3-icon floating box that materialises on the hovered message's border, with \"no text labels or tooltips visible.\" The only non-hover thread entry point is the `1 reply >` chip, which exists solely on messages that already have replies — so there is no way at all to start a new thread.",
+      "recommendation": "Render the per-message action toolbar on `:focus-within` as well as `:hover`, and make each message row focusable (`tabindex=\"0\"`, roving focus through the list) so the toolbar is reachable by Tab/arrow keys. On touch, expose the same three actions via long-press or a persistent overflow affordance. Threading is the product's core structuring mechanism; it cannot be mouse-only."
+    },
+    {
+      "id": "navigation-006",
+      "cluster": "navigation",
+      "severity": "blocker",
+      "screens": [
+        "05-computers.png"
+      ],
+      "category": "empty-error-state",
+      "title": "The rail's only alert leads to a screen with no way to act on it",
+      "evidence": "The rail advertises `generic \"Computers need attention: 1 offline\"` on every other screen. Landing on Computers, the entire actionable content is one row: `button \"Computer offline Bozhidars-MacBook-Air computer offline\"` with `generic [ref=e64]: Bozhidars-MacBook-Air` and `generic [ref=e66]: computer offline`. There is no last-seen timestamp, no reconnect/retry, no troubleshoot link, no error detail. The only button on the whole screen is `button \"Add computer\" [ref=e55]`.",
+      "recommendation": "An alert must terminate in a remedy. Give the offline row a last-seen time (\"offline since 2:14pm, 4 days\"), the likely cause, and a primary action — Reconnect, Re-run install command, or Copy setup command — plus a secondary 'Remove computer'. If nothing can be done in-app, say so explicitly and link the agent-host setup doc. Never let a badge that says \"needs attention\" resolve to a gray label."
+    },
+    {
+      "id": "navigation-007",
+      "cluster": "navigation",
+      "severity": "blocker",
+      "screens": [
+        "03-tasks.png"
+      ],
+      "category": "empty-error-state",
+      "title": "Tasks has no way to create a task",
+      "evidence": "The empty state is \"No tasks yet\" plus \"DM and agent task boards are intentionally excluded from this server-wide view.\" The toolbar (`generic [ref=e58]`) contains only `button \"Channel\"`, `button \"Creator\"`, `button \"Assignee\"` and the Board/List radiogroup. No create control exists anywhere on the screen. Every sibling destination offers one: `button \"Add agent\" [ref=e64]`, `button \"Invite human\" [ref=e149]`, `button \"Add computer\" [ref=e55]`.",
+      "recommendation": "Put a primary 'New task' button in the Tasks header (matching the `+` affordance pattern of Members/Computers) and make it the CTA inside the empty state. The zero-state should read as an invitation to the destination's core action, not a boundary notice."
+    },
+    {
+      "id": "accessibility-008",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "02-activity",
+        "03-tasks",
+        "04-members",
+        "05-computers",
+        "06-search",
+        "07-settings",
+        "09-channel-back",
+        "10-thread",
+        "11-channel-tasks",
+        "11-channel-tasks-tab",
+        "12-channel-files-tab",
+        "13-dm-cindy",
+        "14-create-channel",
+        "15-appearance",
+        "16-notifications",
+        "17-server-profile",
+        "18-billing",
+        "19-administration",
+        "20-applications",
+        "21-mcp",
+        "22-about"
+      ],
+      "category": "1.3.1 Info and Relationships (A); 2.4.1 Bypass Blocks (A)",
+      "title": "No landmarks anywhere in the app; the only region is the toast container",
+      "evidence": "Every tree has the same skeleton: `generic [ref=e1]:` → `generic [ref=e4]:` → `generic [ref=e5]:` (the icon rail with Search/Chat/Activity/Tasks/Members/Computers/Settings), `generic [ref=e47]` (the sidebar) and `generic [ref=e194]` (the message/content pane). The single landmark in all 21 files is the toast container at the very bottom: `- generic:` / `- region \"Notifications\"`. There is no `main`, `navigation`, `banner`, `complementary`, `search`, or skip link on any screen.",
+      "recommendation": "Mark the icon rail and channel sidebar as `<nav>` with distinct `aria-label`s ('Primary', 'Conversations'), the content pane as `<main>`, and the thread panel as `<aside aria-label=\"Thread\">`. Add a 'Skip to main content' link as the first focusable element."
+    },
+    {
+      "id": "accessibility-009",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "04-members",
+        "05-computers",
+        "07-settings",
+        "09-channel-back",
+        "20-applications"
+      ],
+      "category": "1.3.1 Info and Relationships (A); 2.4.6 Headings and Labels (AA)",
+      "title": "No h1 on any screen; page titles are plain generics",
+      "evidence": "04-members.aria.txt: `generic [ref=e49]: Members`. 05-computers.aria.txt: `generic [ref=e49]: Computers`. 01-chat-channel.aria.txt: `generic [ref=e49]: Chat`. 07-settings.aria.txt: `generic [ref=e49]: Settings`. The highest heading present in any of the 21 trees is level 2 (`heading \"Account\" [level=2]`, `heading \"onboarding-owner\" [level=2]`, `heading \"Activity\" [level=2]`). Members and Computers have no heading at all — their content pane is `generic [ref=e162]: Select a channel` / `generic [ref=e71]: Select a channel`.",
+      "recommendation": "Promote the pane title to `<h1>` on each screen (or keep one app-level h1 and demote pane titles consistently to h2), and give the Members / Computers panes a real heading instead of a styled generic."
+    },
+    {
+      "id": "accessibility-010",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "07-settings",
+        "15-appearance",
+        "16-notifications",
+        "17-server-profile",
+        "18-billing",
+        "19-administration",
+        "20-applications",
+        "21-mcp",
+        "22-about"
+      ],
+      "category": "1.3.1 Info and Relationships (A); 2.4.6 Headings and Labels (AA)",
+      "title": "Settings section headers are generics, breaking heading hierarchy inside every settings pane",
+      "evidence": "Each settings pane has exactly one heading (`heading \"Administration\" [level=2] [ref=e116]`) and then card titles as generics: 07-settings `generic [ref=e126]: Account`, `generic [ref=e190]: Session`, `generic [ref=e161]: Connected accounts`; 17-server-profile `generic [ref=e128]: Profile`, `generic [ref=e157]: Danger Zone`; 18-billing `generic [ref=e124]: Current Plan`, `generic [ref=e201]: Upgrade to Pro`, `generic [ref=e226]: Checkout summary`; 19-administration `generic [ref=e124]: Owners & Admins2`, `generic [ref=e239]: System Channels`, `generic [ref=e257]: Pending Invites`, `generic [ref=e267]: Invite Links`, `generic [ref=e288]: Pre-join Agreement`, `generic [ref=e306]: Onboarding`, `generic [ref=e342]: Translation`, `generic [ref=e360]: Member Permissions`. The Administration screen is therefore an 8-section page with a single navigable heading.",
+      "recommendation": "Render every card/section title as `<h3>` under the pane's h2 so screen-reader users can navigate Administration and Billing by heading instead of linearly."
+    },
+    {
+      "id": "accessibility-011",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "02-activity",
+        "03-tasks",
+        "11-channel-tasks",
+        "11-channel-tasks-tab",
+        "14-create-channel",
+        "15-appearance",
+        "18-billing",
+        "20-applications"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 1.3.1 Info and Relationships (A)",
+      "title": "Every radiogroup exposes each option twice — once named, once unnamed",
+      "evidence": "02-activity.aria.txt: `radiogroup \"Filter inbox\" [ref=e60]:` → `radio \"All\" [checked] [ref=e61]`, `radio [checked] [ref=e63]`, `radio \"Unread\" [ref=e64]`, `radio [ref=e66]`, `radio \"Mentions\" [ref=e67]`, `radio [ref=e69]` — six radios for three visible options (02-activity.png shows only three chips: All / Unread / Mentions). Identical duplication in `radiogroup \"Task view\"` (03-tasks e82–e87), `radiogroup \"Message font size\"` (15-appearance e128–e136), `radiogroup \"Billing interval\"` (18-billing e207–e215), `radiogroup \"Connected apps view\"` (20-applications e136–e145) and `radiogroup \"Channel visibility\"` (14-create-channel e1225–e1230).",
+      "recommendation": "The styled element and the native `<input type=\"radio\">` are both reaching the accessibility tree. Keep the native input as the single exposed control and mark the decorative wrapper `aria-hidden=\"true\"` / `role=\"presentation\"` (or move the label text inside the input's `<label>`), so each group exposes N options, not 2N with half of them nameless."
+    },
+    {
+      "id": "accessibility-012",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "15-appearance"
+      ],
+      "category": "4.1.2 Name, Role, Value (A)",
+      "title": "Live agent activity toggle is exposed as both a switch and an unnamed checkbox",
+      "evidence": "15-appearance.aria.txt: `switch \"Live agent activity\" [checked] [ref=e146] [cursor=pointer]` immediately followed by `checkbox [checked] [ref=e147]`. Two controls, one visible affordance, and the second has no accessible name — a screen-reader user hears 'Live agent activity, switch, on' then an anonymous 'checkbox, checked' and cannot tell whether toggling one affects the other. The same pattern appears in the Administration checkboxes, but there the checkbox does carry the name (`checkbox \"Enable message translation for this server …\" [ref=e346]`), so the two implementations are inconsistent with each other.",
+      "recommendation": "Expose exactly one control. Either keep the native checkbox with `role=\"switch\"` and the label, or keep the custom switch and set `aria-hidden=\"true\"` on the underlying input."
+    },
+    {
+      "id": "accessibility-013",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "10-thread",
+        "13-dm-cindy"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 1.1.1 Non-text Content (A)",
+      "title": "Human message avatar buttons have no accessible name",
+      "evidence": "01-chat-channel.aria.txt, repeated for every message Bobby sends: `generic [ref=e566]:` → `button [ref=e567]:` → `img [ref=e569]`, and again at `button [ref=e671]`, `button [ref=e777]`, `button [ref=e881]`, `button [ref=e974]`. Both the button and its only child `img` are nameless, so the button list reads as a run of blank entries. The equivalent agent avatars at least have a name, though a poor one (`button \"Offline\" [ref=e253]`).",
+      "recommendation": "Give the avatar button the member's name, e.g. `aria-label=\"Bobby Ivanov — open profile\"`, matching the name button beside it (`button \"Bobby Ivanov\" [ref=e574]`), and mark the inner `img` `alt=\"\"` since it is decorative once the button is named."
+    },
+    {
+      "id": "accessibility-014",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "10-thread",
+        "13-dm-cindy"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 2.4.6 Headings and Labels (AA)",
+      "title": "Agent avatar buttons are all named 'Offline', producing many identically-named controls with different targets",
+      "evidence": "01-chat-channel.aria.txt exposes eight buttons whose entire accessible name is the presence status: `button \"Offline\" [ref=e253]`, `[ref=e331]`, `[ref=e481]`, `[ref=e590]`, `[ref=e686]`, `[ref=e800]`, `[ref=e896]`, `[ref=e989]`, `[ref=e1078]`, each wrapping `generic \"Offline\"`. 10-thread.aria.txt repeats it at `button \"Offline\" [ref=e1241]` and `[ref=e1323]`. The status word is the name; the identity (Cindy) and the action (open profile) are absent.",
+      "recommendation": "Name the control after its action and subject — `aria-label=\"Cindy, offline — open profile\"` — so status becomes a qualifier rather than the entire name, and the buttons stop colliding in a screen reader's element list."
+    },
+    {
+      "id": "accessibility-015",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "14-create-channel"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 1.3.1 Info and Relationships (A); 2.4.3 Focus Order (A)",
+      "title": "Create Channel overlay is not a dialog and its close button is unnamed",
+      "evidence": "14-create-channel.aria.txt appends the modal after the toast region as a plain wrapper: `generic [ref=e1208]:` → `generic [ref=e1209]:` → `heading \"Create Channel\" [level=2] [ref=e1210]` and `button [ref=e1211]:` → `img [ref=e1212]`. There is no `dialog` role, no aria-modal, and no accessible name on the close control. The full underlying page (sidebar, message list, composer `textbox \"Message #onboarding-owner\" [ref=e1173]: \"@Cindy\"`) remains in the tree and reachable. 14-create-channel.png confirms it renders as a true modal over a dimmed backdrop with an '×' close button.",
+      "recommendation": "Wrap in `role=\"dialog\" aria-modal=\"true\" aria-labelledby` pointing at the 'Create Channel' heading, apply `inert`/`aria-hidden` to the background, trap and restore focus, and label the close control `aria-label=\"Close\"`."
+    },
+    {
+      "id": "accessibility-016",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "14-create-channel"
+      ],
+      "category": "3.3.2 Labels or Instructions (A); 4.1.2 Name, Role, Value (A); 2.5.3 Label in Name (A)",
+      "title": "Create Channel fields are labelled only by placeholder text and the required marker is visual-only",
+      "evidence": "14-create-channel.aria.txt: `generic [ref=e1217]: Name*` followed by `textbox \"e.g. ai-research\" [active] [ref=e1218]`; `generic [ref=e1220]: Description(optional)` followed by `textbox \"What is this channel about?\" [ref=e1221]`; `generic [ref=e1232]: Members(optional)` followed by `textbox \"Search members by name\" [ref=e1235]`. The visible label is 'Name' but the accessible name is 'e.g. ai-research' — no overlap at all. The textbox carries no `[required]` state despite the asterisk visible in 14-create-channel.png, and 'Description(optional)' / 'Members(optional)' have no separator so they announce as one word.",
+      "recommendation": "Associate the visible labels via `<label for>`, keep the example only as `placeholder`, add `required`/`aria-required` to the Name field, and insert a space before '(optional)'."
+    },
+    {
+      "id": "accessibility-017",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "11-channel-tasks-tab",
+        "12-channel-files-tab",
+        "13-dm-cindy",
+        "14-create-channel"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 1.3.1 Info and Relationships (A)",
+      "title": "Sidebar conversation rows nest a button inside an identically-named button",
+      "evidence": "01-chat-channel.aria.txt: `button \"onboarding-owner\" [ref=e96]:` whose only child is `button \"onboarding-owner\" [ref=e97]:` → `img [ref=e99]`, `generic [ref=e103]: onboarding-owner`. Same shape for the DM: `button \"Cindy Onboarding Assistant Offline\" [ref=e116]:` → `button \"Cindy Onboarding Assistant Offline\" [ref=e117]`. Nested interactive content is invalid, creates two tab stops for one visual row, and duplicates the name.",
+      "recommendation": "Flatten to a single button per row. If the row needs a secondary action (the pencil/edit affordance visible in 14-create-channel.png at `img [ref=e104]`), render it as a sibling button with its own name, not as a wrapper."
+    },
+    {
+      "id": "accessibility-018",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "02-activity"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 2.4.6 Headings and Labels (AA)",
+      "title": "Activity rows nest 'Mark as Done' inside a row button whose name is a truncated text blob",
+      "evidence": "02-activity.aria.txt: `button \"onboarding-owner 4 days ago Cindy: Hey Bobby — waking back up after a couple days. Quick recap from last time: I scanned your setup: Claude Code 2.1.215, Codex 0.144.6,…\" [ref=e72]:` contains `button \"Mark as Done\" [ref=e88]`. The second row repeats the pattern at `[ref=e91]` / `[ref=e105]`. The outer name ends in a literal ellipsis, i.e. truncated preview text is being read as the control's name, and both 'Mark as Done' buttons are indistinguishable from each other.",
+      "recommendation": "Move 'Mark as Done' out of the row button as a sibling and qualify it (`aria-label=\"Mark onboarding-owner item as done\"`); name the row after its target ('Open onboarding-owner, 4 days ago, from Cindy') and expose the preview as row content rather than as the accessible name."
+    },
+    {
+      "id": "accessibility-019",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "11-channel-tasks-tab",
+        "12-channel-files-tab",
+        "13-dm-cindy",
+        "14-create-channel"
+      ],
+      "category": "1.3.1 Info and Relationships (A); 4.1.2 Name, Role, Value (A)",
+      "title": "Channel tabs have no associated tabpanels and the tablist is unnamed",
+      "evidence": "01-chat-channel.aria.txt: `tablist [ref=e228]:` with `tab \"Chat\" [selected] [ref=e229]`, `tab \"Tasks\" [ref=e232]`, `tab \"Files\" [ref=e235]`. The content that the tabs control is a bare `generic [ref=e242]` (messages), `generic [ref=e239]` on 11-channel-tasks-tab, and `generic [ref=e243]` on 12-channel-files-tab — never `tabpanel`. No tab exposes aria-controls and the tablist has no accessible name, so it is indistinguishable from the global rail on a screen with two tab-like navigations.",
+      "recommendation": "Add `role=\"tabpanel\"` with `aria-labelledby` on the content container and `aria-controls` on each tab, and name the tablist (`aria-label=\"Channel views\"`)."
+    },
+    {
+      "id": "accessibility-020",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "07-settings",
+        "15-appearance",
+        "16-notifications",
+        "17-server-profile",
+        "18-billing",
+        "19-administration",
+        "20-applications",
+        "21-mcp",
+        "22-about"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 1.3.1 Info and Relationships (A)",
+      "title": "Settings navigation gives no programmatic indication of the current pane",
+      "evidence": "On 15-appearance.aria.txt the Appearance pane is open, yet its nav item is `button \"Appearance\" [ref=e65]:` — byte-identical to the same button on 22-about.aria.txt and every other settings screen. No `[pressed]`, `[selected]`, or aria-current appears on any of the nine settings nav buttons on any screen. 07-settings.png and 20-applications.png confirm the active item is highlighted in pink, so the state is conveyed by colour alone. This is inconsistent with the global rail, which does expose it: `button \"Settings\" [active] [pressed] [ref=e40]` (07-settings) and `button \"Members\" [active] [pressed] [ref=e27]` (04-members).",
+      "recommendation": "Add `aria-current=\"page\"` (or make the list a real tablist with `aria-selected`) to the active settings item, matching the state convention already used by the icon rail."
+    },
+    {
+      "id": "accessibility-021",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "10-thread"
+      ],
+      "category": "2.5.3 Label in Name (A); 1.3.1 Info and Relationships (A)",
+      "title": "Thread panel title button's accessible name does not contain its visible label",
+      "evidence": "10-thread.aria.txt: `button \"Scroll thread to first message\" [ref=e1217]:` whose visible content is `- text: Thread` and `generic [ref=e1218]: \"— #onboarding-owner\"`. A speech-input user saying 'click Thread' cannot activate it, and the panel title — the only thing identifying which conversation the panel belongs to — is exposed as a button label rather than a heading.",
+      "recommendation": "Render the title as a heading (`<h2>Thread — #onboarding-owner</h2>`) and, if the scroll affordance is needed, make it a separate button whose name starts with the visible text, e.g. `aria-label=\"Thread — #onboarding-owner: scroll to first message\"`."
+    },
+    {
+      "id": "accessibility-022",
+      "cluster": "accessibility",
+      "severity": "high",
+      "screens": [
+        "20-applications"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 2.4.6 Headings and Labels (AA); 1.3.1 Info and Relationships (A)",
+      "title": "Marketplace card is a button with a 400-character name while the visible 'Install' button is a generic",
+      "evidence": "20-applications.aria.txt: `button \"me.build Content & Creative · by Botiverse me.build is where agents and humans on Raft get their own page — built and owned by them, not a filled-in profile form. An agent claims a handle, then publishes its page, with a shareable me.build/a/<handle> link. Open me.build and roll the dice: a living feed of the agents actually building on Raft. Content & Creative Install\" [ref=e159]` — the whole card is one control whose name is the entire description, ending in the word 'Install'. The install affordance itself is `generic [ref=e168]: Install`, with no button role. Same for Hands (`[ref=e169]` / `generic [ref=e178]: Install`) and musik.build (`[ref=e179]` / `generic [ref=e188]: Install`). 20-applications.png confirms 'Install' renders as a pink primary button in the corner of each card.",
+      "recommendation": "Make 'Install' a real `<button aria-label=\"Install me.build\">`, reduce the card's name to the app name (`aria-labelledby` the title node), and expose the description as card content, not as the control's name."
+    },
+    {
+      "id": "chat-023",
+      "cluster": "chat",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "10-thread"
+      ],
+      "category": "affordance",
+      "title": "\"Stop all agents in this channel\" is an unlabelled icon styled identically to Search and Mute",
+      "evidence": "ARIA 01:83-84 exposes `button \"Stop all agents in this channel\" [ref=e213]` as the third of five square icon buttons in the channel header, sandwiched between `button \"Mute activity for this channel\" [ref=e209]` and `button \"Edit channel\" [ref=e216]`. Two independent visual reads of that header produced: \"Magnifying glass / Bell / Square (Layout) — toggle sidebar/panel view / Gear — settings / User silhouette with 2\", i.e. the destructive control was read as a benign layout toggle both times. On styling: \"None of these buttons are styled differently; they all feature black icons on a white background with a thin black border. None are red or styled as destructive.\" No visible label, no separator, no confirmation cue.",
+      "recommendation": "Move the kill-switch out of the undifferentiated icon row. Give it a text label (\"Stop agents\"), destructive styling distinct from the neutral row, a separator, and a confirm step naming what will be stopped (\"Stop 1 running agent in #onboarding-owner?\"). At minimum, never place an irreversible action in the same visual class as Search and Mute."
+    },
+    {
+      "id": "chat-024",
+      "cluster": "chat",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "10-thread"
+      ],
+      "category": "feedback-state",
+      "title": "Threads are write-only from the channel: no unread signal, no recency, no \"also send to channel\"",
+      "evidence": "The channel-level thread affordance is `button \"1 reply > Cindy Here's what team mode looks like in practice:\"` (01:127-131), rendered as \"'1 reply >' in a small, light-grey sans-serif font … significantly less prominent than the message body.\" It shows a static count and a preview — no last-reply timestamp, no unread state, no participant set. Grepping all six snapshots for `unread` / `New messages` / any divider returns zero matches; there is no unread line anywhere in the channel. The thread composer (10:376-385) contains only `textbox \"Message thread\"`, `Attach media`, `Attach file`, `Send` — there is no \"also send to #onboarding-owner\" option. Against product copy that states \"Your agents keep working after you leave\" (01:313), replies that land while you are away are invisible from the channel.",
+      "recommendation": "Make the thread chip a state indicator, not a counter: bold/tinted when unread, with participant avatars and \"last reply 3h ago\". Add an unread divider to the channel list. Add an \"Also send to #channel\" checkbox to the thread composer so a decision made in a thread can be surfaced to the room."
+    },
+    {
+      "id": "chat-025",
+      "cluster": "chat",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back"
+      ],
+      "category": "information-architecture",
+      "title": "Human vs. agent identity is carried only by a low-contrast grey sub-label",
+      "evidence": "Cindy's messages are labelled `generic \"Onboarding Assistant\"` and Bobby's `generic \"owner\"` (01:115 vs 01:150) — the same slot, the same styling. Visual inspection: \"the badge text `Onboarding Assistant` [is] set in a light gray color … offering low contrast\", and \"there are no distinct color codings, background cards, or special borders differentiating these messages as agent-specific.\" No AGENT / BOT / APP tag exists in any snapshot. The two labels use different taxonomies — a job title vs. a workspace role — so nothing tells the reader that one is a machine. Meanwhile the agent writes with unhedged authority: \"Confirmed what I found:\" (01:260), \"The scan shows everything is there — Claude Code 2.1.215, Codex 0.144.6 (latest)\" (01:191), \"That should clear the 'outdated daemon' warning\" (01:196).",
+      "recommendation": "Introduce one unambiguous agent marker used everywhere an agent name appears: a solid `AGENT` chip at full text contrast immediately after the display name, plus a distinct avatar treatment (e.g. a squared frame reserved for agents). Keep the free-text role (\"Onboarding Assistant\") as secondary. Human roles like `owner` should read as a different class of badge, not the same grey pill."
+    },
+    {
+      "id": "chat-026",
+      "cluster": "chat",
+      "severity": "high",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "10-thread"
+      ],
+      "category": "accessibility",
+      "title": "Screen readers hear \"Offline\" nine times and never hear who sent a human message",
+      "evidence": "Every one of Cindy's 9 messages wraps its avatar in `button \"Offline\"` whose only accessible name is the status word, placed *before* the author: `button \"Offline\" [ref=e253]` → `generic \"Offline\" [ref=e320]` → `button \"Cindy\" [ref=e323]` → `generic \"Onboarding Assistant\"` (01:110-115). All 5 of Bobby's messages use `button [ref=e567]` containing only `img [ref=e569]` (01:145-146) — a focusable control with no accessible name at all. 10-thread has 11 such `button \"Offline\"` nodes. So AT users get a status word repeated nine times ahead of identity for the agent, and an anonymous \"button\" for the human.",
+      "recommendation": "Name the avatar control after the person it opens: `aria-label=\"Cindy, Onboarding Assistant — profile\"` (and `\"Bobby Ivanov, owner — profile\"`). Move presence out of the button name into a decorative dot with `aria-hidden`, and expose it once per author in a live region or in the member list rather than on every message."
+    },
+    {
+      "id": "chat-027",
+      "cluster": "chat",
+      "severity": "high",
+      "screens": [
+        "14-create-channel"
+      ],
+      "category": "accessibility",
+      "title": "Create Channel is not a dialog, and its close button has no accessible name",
+      "evidence": "The modal root is `generic [ref=e1208]` (14:322) containing `heading \"Create Channel\" [level=2]` — there is no `dialog` role and no `aria-modal` anywhere in the snapshot, even though the same file does expose `region \"Notifications\"`, so roles are emitted where they exist. The close control is `button [ref=e1211]` → `img [ref=e1212]` (14:325-326): announced as bare \"button\". The entire background application is still in the accessibility tree behind the overlay — `textbox \"Message #onboarding-owner\" [ref=e1173]` with `@Cindy` still in it (14:299) and `button \"Create channel\" [ref=e93]` (14:52) remain fully exposed — so nothing marks the background inert while a visually dimming overlay is up.",
+      "recommendation": "Wrap the modal in `role=\"dialog\" aria-modal=\"true\"` with `aria-labelledby` pointing at the heading, apply `inert` to the app root while it is open, and label the dismiss control `aria-label=\"Close\"`. Trap and restore focus."
+    },
+    {
+      "id": "chat-028",
+      "cluster": "chat",
+      "severity": "high",
+      "screens": [
+        "14-create-channel"
+      ],
+      "category": "empty-error-state",
+      "title": "Create Channel submits with the required Name empty — enabled primary, no validation, no naming rules",
+      "evidence": "`generic [ref=e1217]: Name*` sits above an empty `textbox \"e.g. ai-research\" [active] [ref=e1218]` (14:329-330). The submit control is `button \"Create Channel\" [ref=e1308]` (14:357) with no `[disabled]` attribute, rendered \"filled with solid pink … no visual 'grayed out' or disabled styling applied, even though the name field contains only light grey placeholder text.\" There is no `aria-required`, no `aria-describedby`, no helper text: \"There is no explicit text helper or tooltip explaining naming rules (such as lowercase, no spaces, or hyphens). The only hint is the placeholder text itself: `e.g. ai-research`.\"",
+      "recommendation": "Disable the primary until Name is non-empty and valid, or validate inline on blur/submit with the error tied to the field via `aria-describedby` and focus moved to it. State the rule under the field (\"Lowercase letters, numbers and hyphens\") and live-normalise typed input to a `#channel-name` preview so the transformation is visible before commit."
+    },
+    {
+      "id": "chat-029",
+      "cluster": "chat",
+      "severity": "high",
+      "screens": [
+        "11-channel-tasks-tab",
+        "14-create-channel"
+      ],
+      "category": "accessibility",
+      "title": "Both radio groups expose four radios for two options, two of them nameless",
+      "evidence": "`radiogroup \"Task view\" [ref=e259]` contains four children: `radio \"Board\" [checked] [ref=e260]`, then a second `radio [checked] [ref=e262]`, then `radio \"List\" [ref=e263]`, then `radio [ref=e265]` (11:118-126). `radiogroup \"Channel visibility\" [ref=e1224]` has the identical shape: `radio \"Public\" [checked] [ref=e1225]`, `radio [checked] [ref=e1227]`, `radio \"Private\" [ref=e1228]`, `radio [ref=e1230]` (14:336-344). Only two controls are visible in each case. Screen-reader users are told \"2 of 4\" and hit two unlabelled options; arrow-key traversal takes four steps through a two-state toggle.",
+      "recommendation": "Emit one `input[type=radio]` per option with the visible card as its `<label>`, so the label text becomes the radio's accessible name. Remove the duplicated bare inputs — this is the same defect in two independent components, so fix it in the shared segmented-control/radio-card primitive."
+    },
+    {
+      "id": "navigation-030",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "03-tasks.png"
+      ],
+      "category": "copy",
+      "title": "Empty-state copy explains an internal exclusion policy instead of the next action",
+      "evidence": "\"DM and agent task boards are intentionally excluded from this server-wide view.\" is the only guidance on the screen. It answers a question the user has not asked, and uses three pieces of unexplained vocabulary — \"DM and agent task boards\", \"server-wide view\", and (in the header) \"0 channel tasks\" — for a user whose only visible server identifier is a black tile reading \"R\".",
+      "recommendation": "Lead with what to do: \"No tasks in this server's channels yet — create one to track work across your agents.\" Demote the exclusion note to a secondary line only if users actually hit it, and phrase it as a location hint: \"Tasks in DMs and agent boards live on those boards.\""
+    },
+    {
+      "id": "navigation-031",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "04-members.png",
+        "05-computers.png"
+      ],
+      "category": "information-architecture",
+      "title": "Members and Computers spend 78% of the window telling you to select a channel",
+      "evidence": "04 ARIA: `generic [ref=e162]: Select a channel`. 05 ARIA: `generic [ref=e71]: Select a channel`. Measuring the divider in both screenshots, the list pane ends at x=378 of a 1706px viewport — the placeholder pane is 77.7% of the window width and its only content is the words \"SELECT A CHANNEL\" at 2.85:1 contrast. Neither screen renders a channel list, so the instruction cannot be followed from where it is given.",
+      "recommendation": "This is chat's placeholder leaking into two non-chat destinations. Replace with a destination-appropriate detail pane: on Members, selecting a person should show their profile/agent config; on Computers, the machine's status, host, and connected agents. Until a row is selected, the placeholder should name the actual action — \"Select a computer to see its status\" — or the detail pane should default to the single existing item rather than sitting blank."
+    },
+    {
+      "id": "navigation-032",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "05-computers.png"
+      ],
+      "category": "feedback-state",
+      "title": "The attention badge clears itself when you visit the tab, while the problem stays unresolved",
+      "evidence": "On 02, 03, 04 and 06 the rail contains `button \"Computers\"` wrapping `generic \"Computers need attention: 1 offline\"`, and a pixel scan finds 68 slate rgb(153,161,175) badge pixels at (x 44-52, y 385-394). On 05-computers that ARIA node is absent entirely (`button \"Computers\" [active] [pressed]` → `img` only) and the same coordinates are white. Yet the row still reads `computer offline` — nothing was fixed.",
+      "recommendation": "Tie the badge to the underlying condition, not to visitation. A machine that is still offline must keep its rail indicator regardless of which tab is focused; only reconnection (or an explicit user dismissal/mute) should clear it. Otherwise a user who glances at the rail after visiting Computers concludes the fleet is healthy."
+    },
+    {
+      "id": "navigation-033",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "02-activity.png",
+        "03-tasks.png"
+      ],
+      "category": "accessibility",
+      "title": "Every segmented control exposes double the options, half of them nameless, with two 'checked' in one group",
+      "evidence": "`radiogroup \"Filter inbox\" [ref=e60]` contains six radios for three visible chips: `radio \"All\" [checked]`, `radio [checked] [ref=e63]` (no name), `radio \"Unread\"`, `radio [ref=e66]`, `radio \"Mentions\"`, `radio [ref=e69]`. `radiogroup \"Task view\" [ref=e81]` repeats it: `radio \"Board\" [checked]`, `radio [checked] [ref=e84]`, `radio \"List\"`, `radio [ref=e87]`.",
+      "recommendation": "The styled label and the underlying native input are both reaching the accessibility tree. Hide the visual wrapper from AT (or drop the duplicate input) so each option is exactly one named radio with exactly one checked per group. As shipped, a screen-reader user hears \"1 of 6\", three blank options, and two simultaneously-checked radios — they cannot determine which filter is active."
+    },
+    {
+      "id": "navigation-034",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "02-activity.png"
+      ],
+      "category": "accessibility",
+      "title": "'Mark as Done' is a button nested inside the row button",
+      "evidence": "`button \"onboarding-owner 4 days ago Cindy: Hey Bobby — …\" [ref=e72]` contains as a child `button \"Mark as Done\" [ref=e88]`. Same structure on the second row (`button [ref=e91]` containing `button \"Mark as Done\" [ref=e105]`).",
+      "recommendation": "Interactive nesting is invalid and AT flattens or drops the inner control — this is the only way to clear an inbox item. Restructure the row as a non-button container with two sibling controls: a link/button covering the message body, and the Mark-as-Done button beside it."
+    },
+    {
+      "id": "navigation-035",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "02-activity.png"
+      ],
+      "category": "accessibility",
+      "title": "Each inbox row's accessible name is the entire truncated message preview",
+      "evidence": "`button \"onboarding-owner 4 days ago Cindy: Hey Bobby — waking back up after a couple days. Quick recap from last time: I scanned your setup: Claude Code 2.1.215, Codex 0.144.6,…\"` — roughly 180 characters, terminating in a literal ellipsis that is read aloud.",
+      "recommendation": "Give the row a short accessible name (\"Open onboarding-owner, from Cindy, 4 days ago\") and expose the preview as separate text content the user can read on demand. Scanning an inbox by keyboard is unusable at any real message volume when every Tab stop replays a full paragraph."
+    },
+    {
+      "id": "navigation-036",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "02-activity.png"
+      ],
+      "category": "affordance",
+      "title": "The only 'jump to next unread' accelerator is a double-click on a non-interactive div",
+      "evidence": "`generic \"Double-click to jump to the next unread item\" [ref=e49]` wraps the header, and the identical string repeats on the nested `generic [ref=e53]` that contains `heading \"Activity\" [level=2]` and `paragraph: 2 active`. It is a `generic`, not a button — no role, not focusable. Nothing in the screenshot hints at it. The structurally identical Tasks header (`generic [ref=e49]` in 03) carries no such title.",
+      "recommendation": "Double-click on a heading is not a discoverable web affordance and is unreachable by keyboard. Make it a real control — a visible 'Next unread' button with a keyboard shortcut shown beside it — and remove the duplicated title attribute, which currently makes AT announce the tooltip string twice around the page title."
+    },
+    {
+      "id": "navigation-037",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "02-activity.png",
+        "04-members.png",
+        "05-computers.png"
+      ],
+      "category": "visual-hierarchy",
+      "title": "One low-contrast slate dot carries three different meanings and none of them look urgent",
+      "evidence": "The same rgb(153,161,175) 9×10px dot is the rail 'needs attention' badge (2.03:1 against the rail fill rgb(255,212,64)), Cindy's status chip in Members (`generic \"Offline\" [ref=e142]`, 2.5:1 on cream), and the computer avatar dot on 05. A scan of all five screenshots finds zero alert-hued (red/amber) pixels — the palette contains no error or warning colour at all.",
+      "recommendation": "Introduce a degraded/offline colour and use it consistently. Reserve neutral slate for 'idle/unknown' and give 'offline' and 'needs attention' a distinguishable treatment that survives against the yellow rail. As shipped, the single signal that the fleet is degraded is the lowest-contrast mark in the app, sitting on its highest-contrast surface."
+    },
+    {
+      "id": "navigation-038",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "02-activity.png",
+        "03-tasks.png",
+        "04-members.png",
+        "06-search.png"
+      ],
+      "category": "visual-hierarchy",
+      "title": "Two unread messages get no rail signal, one sleeping laptop gets the only one",
+      "evidence": "Activity's header reads \"2 active\" (`paragraph [ref=e56]`) over two unread-looking items, yet a full-height pixel scan of the rail on every screen finds exactly one badge and it belongs to Computers. Neither `button \"Activity\"` nor `button \"Chat\"` carries any count or dot in the ARIA tree or in the rendered rail.",
+      "recommendation": "Badge Activity and Chat with unread counts. In a workspace for agent teams, waiting agent messages are the higher-priority interrupt; the rail currently inverts that, so users must open Activity to learn there is work."
+    },
+    {
+      "id": "navigation-039",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "04-members.png",
+        "05-computers.png",
+        "06-search.png"
+      ],
+      "category": "accessibility",
+      "title": "Three of five destinations expose no heading, and the app has no landmarks",
+      "evidence": "Activity and Tasks expose `heading \"Activity\" [level=2]` / `heading \"Tasks\" [level=2]`. Members' title is `generic [ref=e49]: Members`; Computers' is `generic [ref=e49]: Computers`; Search exposes no title node at all. There is no `h1` on any screen, and no `navigation` or `main` landmark — every container in all five trees is a bare `generic`, with `region \"Notifications\"` the sole landmark.",
+      "recommendation": "Promote each destination title to a real `h1`, wrap the rail in `nav` and the content pane in `main`, and add a skip link. Right now heading navigation and skip-to-content fail on three of five destinations, so a screen-reader user cannot confirm which destination actually loaded."
+    },
+    {
+      "id": "navigation-040",
+      "cluster": "navigation",
+      "severity": "high",
+      "screens": [
+        "03-tasks.png",
+        "04-members.png",
+        "05-computers.png",
+        "06-search.png"
+      ],
+      "category": "accessibility",
+      "title": "Contrast fails on precisely the text that has to teach the empty screens",
+      "evidence": "Measuring the darkest pixel of each string (best case — anti-aliased edges are lighter still): \"SELECT A CHANNEL\" 2.85:1; Search body copy \"Search channels, DMs, people, agents, and message history.\" 2.85:1; \"Search everything\" 3.95:1; \"computer offline\" 2.11:1; \"Onboarding Assis…\" and \"Bozhidars-MacBook-Air\" 2.84:1; \"0 channel tasks\" 3.95:1; \"Relevant\" (disabled) 2.43:1; search placeholder 2.85:1. WCAG AA requires 4.5:1 (3:1 for large text).",
+      "recommendation": "Darken all secondary/muted text to at least 4.5:1 — around rgb(90,88,84) on the cream and white surfaces. These strings are the only content on four of five screens; making the guidance the least legible element inverts the hierarchy the empty states depend on."
+    },
+    {
+      "id": "settings-041",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "22-about"
+      ],
+      "category": "copy",
+      "title": "About pane promises version, diagnostics, feedback and release history — and contains none of them",
+      "evidence": "The entire pane is two cards. The first reads \"Raft\" / \"Version, diagnostics, feedback, and release history live under Settings.\" (22-about.aria.txt:127-128). The second is \"Workspace\" / \"raft-bobby-test\" / \"/raft-bobby-test\" (lines 139-140). The screenshot confirms nothing else renders below. There is no version string, no build hash, no diagnostics, no feedback affordance anywhere on the screen — and the sentence is self-referential: it tells a user already inside Settings that the content lives \"under Settings\".",
+      "recommendation": "Render the actual data here: version + build + commit with copy-to-clipboard, environment/region, a diagnostics dump button, and a Send feedback entry point. If Release Notes stays a separate nav item, link it from this card rather than describing it. Delete the Workspace card — it duplicates 17-server-profile verbatim."
+    },
+    {
+      "id": "settings-042",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "20-applications"
+      ],
+      "category": "affordance",
+      "title": "An app can be installed by activating the card, and \"Install\" is not a real button",
+      "evidence": "Each marketplace tile is a single button whose accessible name is the whole listing ending in the word Install: 'button \"me.build Content & Creative · by Botiverse me.build is where agents and humans on Raft get their own page … Content & Creative Install\" [ref=e159]' (20-applications.aria.txt:105). The visually pink Install control inside it is not interactive — it is 'generic [ref=e168]: Install' (line 112). By contrast MCP's equivalent is a genuine 'button \"Add\" [ref=e152]' (21-mcp.aria.txt:97). Cost: a keyboard or screen-reader user reaches one focus stop, hears ~60 words of marketing copy, and the name ends in \"Install\" — so pressing Enter appears to install a third-party app on the workspace. Sighted users get the inverse problem: they aim at the pink rectangle that is not the control.",
+      "recommendation": "Make the tile non-interactive with a real `<button>Install</button>` and a separate \"View details\" link. If the card must stay clickable, its action must be \"open details\", its accessible name must be app name + vendor only, and the word Install must not appear in it."
+    },
+    {
+      "id": "settings-043",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "20-applications"
+      ],
+      "category": "empty-error-state",
+      "title": "Install offers no scope or permission disclosure before granting a third party workspace access",
+      "evidence": "The only trust signal on the pane is a line of grey footnote text: \"Raft reviews every third-party listing before it appears in the marketplace.\" (20-applications.aria.txt:131). No tile states what data the app reads, which channels or agents it touches, or that install is workspace-wide rather than personal. The card header says \"Third-party apps for this server\" (line 82) — i.e. every member is affected — yet Install is a one-step pink primary action.",
+      "recommendation": "Install must open a consent step listing requested scopes, the surfaces affected (channels, tasks, agents, files) and who is authorising on whose behalf, with Install as the confirming action inside that step. Add per-tile scope chips so the cost is visible before the click."
+    },
+    {
+      "id": "settings-044",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "19-administration"
+      ],
+      "category": "affordance",
+      "title": "Create Invite Link is enabled with both fields empty, minting an unlimited-use link with no expiry",
+      "evidence": "'spinbutton \"Max Uses\" [ref=e273]' and 'textbox \"Expires At\" [ref=e276]' are both empty (19-administration.aria.txt:130,133) and 'button \"Create Invite Link\" [ref=e277]' (line 134) is enabled — unlike every other action in the cluster, which ships disabled until dirty. The screenshot shows the only statement of the empty-field default is the placeholder \"Unlimited\" inside Max Uses, which disappears the moment the field is focused; Expires At shows the browser-native \"dd/mm/yyyy, --:--\", which discloses nothing about empty-value behaviour. Cost: the default one-click outcome is a permanent, unlimited-use join link into an agent workspace, and the admin is never told that is what they created.",
+      "recommendation": "Never encode a security default in a placeholder. Ship explicit defaults (e.g. Max uses = 10, Expires in = 7 days) as real values, or gate the button until both are set. Show the resolved policy as text next to the button — \"This link will never expire and can be used any number of times\" — before creation. Also state the timezone for Expires At; the native control gives no zone."
+    },
+    {
+      "id": "settings-045",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "15-appearance",
+        "18-billing",
+        "20-applications"
+      ],
+      "category": "accessibility",
+      "title": "Every radio and switch is duplicated in the accessibility tree, doubling every choice count",
+      "evidence": "Appearance: 'radio \"Small\" [ref=e128]' then a bare 'radio [ref=e130]', 'radio \"Medium\" [checked] [ref=e131]' then 'radio [checked] [ref=e133]', 'radio \"Large\" [ref=e134]' then 'radio [ref=e136]' — six radios for three options (15-appearance.aria.txt:81-89). The switch is doubled too: 'switch \"Live agent activity\" [checked] [ref=e146]' followed by 'checkbox [checked] [ref=e147]' (lines 114-115). Billing repeats it — 'radio \"Monthly\" [ref=e207]', 'radio [ref=e209]', 'radio \"Yearly Save 12%\" [checked] [ref=e210]', 'radio [checked] [ref=e215]' — four radios for two options (18-billing.aria.txt:137-144). Applications: six radios for three tabs (20-applications.aria.txt:85-94). Cost: a screen-reader user hears \"Small, radio button, 1 of 6\", then an unlabelled radio button, and cannot tell which of two checked radios is live — on the control that decides whether they are billed monthly or annually.",
+      "recommendation": "The visually-hidden native input and the styled element are both exposed. Give the native input the role and label and mark the presentational element `aria-hidden=\"true\"`, or drop the native input and put role/state on the styled element. One node per option."
+    },
+    {
+      "id": "settings-046",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "19-administration"
+      ],
+      "category": "feedback-state",
+      "title": "Administration stacks five independent Save buttons with no global dirty state",
+      "evidence": "Separate 'button \"Save\" [disabled]' instances sit in System Channels (19-administration.aria.txt:115), Pre-join Agreement (line 150), Onboarding (line 178), Translation (line 189) and Member Permissions (line 200), plus a sixth 'button \"Update Role\" [disabled]' at line 90. The pane is longer than the viewport — the screenshot cuts off inside Invite Links, four sections above the last Save. Nothing at the top or in a sticky bar reports unsaved changes. Cost: an admin who toggles Translation, scrolls up, toggles Hide #all and clicks the Save they can see persists one change and silently discards the other, with no warning on navigating away.",
+      "recommendation": "Either one sticky \"You have unsaved changes / Save all / Discard\" bar for the pane, or save-on-change per section with per-row confirmation. Do not mix. Either way an unsaved section must be visibly marked when scrolled out of view."
+    },
+    {
+      "id": "settings-047",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "15-appearance",
+        "16-notifications",
+        "07-settings",
+        "19-administration"
+      ],
+      "category": "consistency",
+      "title": "Persistence model changes from pane to pane with no signal to the user",
+      "evidence": "Appearance auto-saves and reports it with \"Saved on this device.\" (15-appearance.aria.txt:90,113). Notifications requires an explicit 'button \"Save\" [disabled]' for the Mute checkbox (16-notifications.aria.txt:90) yet its sibling 'button \"Enable Push Notifications\"' (line 82) acts immediately — two persistence models inside one card. Account and Server Profile use 'button \"Save Profile\" [disabled]' (07-settings.aria.txt:102; 17-server-profile.aria.txt:94). Administration uses five Saves. Cost: a user who learns \"settings just save\" in Appearance will toggle Mute this server, navigate away, and lose it; a user who learns \"click Save\" will hunt for one in Appearance and not find it.",
+      "recommendation": "Pick one model for the whole Settings area. If some panes are genuinely device-local and instant, keep the \"Saved on this device.\" affordance but give every other pane an equally prominent, equally placed save/confirmation slot so the difference reads as deliberate rather than accidental."
+    },
+    {
+      "id": "settings-048",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "19-administration",
+        "07-settings",
+        "18-billing"
+      ],
+      "category": "accessibility",
+      "title": "No heading structure below h2 and no landmarks — the longest pane is unnavigable by assistive tech",
+      "evidence": "Each pane exposes exactly one heading, always level 2 (e.g. 'heading \"Administration\" [level=2] [ref=e116]', 19-administration.aria.txt:71); there is no h1 and no h3 in any of the nine snapshots. Section titles are plain text: 'generic [ref=e124]: Owners & Admins2', 'generic [ref=e239]: System Channels', 'generic [ref=e267]: Invite Links', 'generic [ref=e288]: Pre-join Agreement', 'generic [ref=e306]: Onboarding', 'generic [ref=e342]: Translation', 'generic [ref=e360]: Member Permissions'. The only landmark in the document is 'region \"Notifications\"' (line 201) — the toast area. There is no navigation landmark around the 12-item sidebar and no main landmark around the pane. Cost: reaching Member Permissions by screen reader means arrowing through roughly two hundred nodes, and the sidebar is re-traversed on every pane change with no skip target.",
+      "recommendation": "Promote each section title to an h3, add an h1 for the Settings area with the pane title as h2, wrap the sub-nav in `<nav aria-label=\"Settings\">` and the pane in `<main>`. Rename the toast region so it stops colliding with the Notifications settings pane."
+    },
+    {
+      "id": "settings-049",
+      "cluster": "settings",
+      "severity": "high",
+      "screens": [
+        "07-settings",
+        "15-appearance",
+        "19-administration"
+      ],
+      "category": "accessibility",
+      "title": "The current settings pane is signalled by pink fill only — no state in the accessibility tree",
+      "evidence": "On the Appearance screen the active item is exposed as plain 'button \"Appearance\" [ref=e65]' (15-appearance.aria.txt:33) — no aria-current, no [pressed], no [selected]. Same for 'button \"Account\" [ref=e56]' on 07-settings and 'button \"Administration\" [ref=e82]' on 19-administration. Grepping all nine snapshots for aria-current / [selected] returns nothing; the only state marker in the sidebar is the outer rail's 'button \"Settings\" [pressed] [ref=e40]'. Visually the sole differentiator is the #FE7DA8 fill. Cost: screen-reader and low-vision users cannot determine which of twelve panes they are on, and the twelve items are not marked up as a tab set or list either.",
+      "recommendation": "Add `aria-current=\"page\"` (or role=tab + aria-selected if they are tabs) to the active item, and add a non-colour cue — the active item already has a left border; make it a distinct weight and pair it with a text or icon state so the signal survives greyscale."
+    },
+    {
+      "id": "accessibility-050",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "11-channel-tasks-tab",
+        "12-channel-files-tab",
+        "13-dm-cindy",
+        "14-create-channel"
+      ],
+      "category": "2.4.6 Headings and Labels (AA); 4.1.2 Name, Role, Value (A)",
+      "title": "Three different sort controls share the accessible name 'Sort sidebar conversations'",
+      "evidence": "01-chat-channel.aria.txt exposes the same name three times for three different section scopes: under Joint Channels `button \"Sort sidebar conversations\" [ref=e73]`, under Channels `button \"Sort sidebar conversations\" [ref=e89]`, and under Direct Messages `button \"Sort sidebar conversations\" [ref=e111]`. Nothing in the name distinguishes which list each one sorts.",
+      "recommendation": "Scope each name to its section: 'Sort joint channels', 'Sort channels', 'Sort direct messages' — mirroring the neighbouring create buttons, which already do this correctly (`button \"Create joint channel\" [ref=e77]` vs `button \"Create channel\" [ref=e93]`)."
+    },
+    {
+      "id": "accessibility-051",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "03-tasks",
+        "11-channel-tasks",
+        "11-channel-tasks-tab"
+      ],
+      "category": "2.4.6 Headings and Labels (AA); 4.1.2 Name, Role, Value (A)",
+      "title": "'Tasks' names four distinct controls and the server-wide view is captioned '0 channel tasks'",
+      "evidence": "11-channel-tasks-tab.aria.txt carries, on one screen, `button \"Tasks\" [ref=e22]` (global rail), `tab \"Tasks\" [ref=e232]` (channel view) — two different destinations with the same name. 03-tasks.aria.txt (server-wide Tasks) shows `heading \"Tasks\" [level=2] [ref=e55]` with `paragraph [ref=e56]: 0 channel tasks` and the body copy `generic [ref=e95]: DM and agent task boards are intentionally excluded from this server-wide view.` — the caption says 'channel tasks' for a view explicitly described as server-wide. 11-channel-tasks.aria.txt duplicates the same '0 channel tasks' string in the channel context.",
+      "recommendation": "Differentiate the names ('All tasks' for the rail/server view vs 'Channel tasks' for the tab) and make the count caption match its scope ('0 tasks across channels' vs '0 tasks in this channel')."
+    },
+    {
+      "id": "accessibility-052",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "19-administration",
+        "21-mcp"
+      ],
+      "category": "2.4.6 Headings and Labels (AA); 4.1.2 Name, Role, Value (A)",
+      "title": "Repeated generic action names: 'Add' ×2, 'Add server' ×2, 'Save' ×5",
+      "evidence": "21-mcp.aria.txt: `button \"Add\" [ref=e152]` (Notion) and `button \"Add\" [ref=e159]` (Linear) are distinguished only by the sibling `paragraph [ref=e150]: Notion` / `paragraph [ref=e157]: Linear`; `button \"Add server\" [ref=e127]` and `button \"Add server\" [ref=e138]` both appear on the same screen. 19-administration.aria.txt has five separate `button \"Save\" [disabled]` controls, one each under System Channels, Pre-join Agreement, Onboarding, Translation and Member Permissions, all with the identical name.",
+      "recommendation": "Qualify each: `aria-label=\"Add Notion MCP server\"`, `aria-label=\"Save system channel settings\"`, etc. Where the visible text must stay short, use `aria-label` so the visible label remains a substring (satisfying 2.5.3)."
+    },
+    {
+      "id": "accessibility-053",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "01-chat-channel",
+        "02-activity",
+        "03-tasks",
+        "04-members",
+        "06-search",
+        "07-settings",
+        "09-channel-back",
+        "10-thread",
+        "11-channel-tasks",
+        "11-channel-tasks-tab",
+        "12-channel-files-tab",
+        "13-dm-cindy",
+        "14-create-channel",
+        "15-appearance",
+        "16-notifications",
+        "17-server-profile",
+        "18-billing",
+        "19-administration",
+        "20-applications",
+        "21-mcp",
+        "22-about"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 1.3.1 Info and Relationships (A); 1.4.1 Use of Color (A)",
+      "title": "Computers alert badge is not part of the button's accessible name",
+      "evidence": "On 20 of 21 screens: `button \"Computers\" [ref=e34]:` → `generic [ref=e35]:` → `img [ref=e36]` and `generic \"Computers need attention: 1 offline\"`. The button's accessible name is only 'Computers' — the aria-label on the child generic does not contribute, because the button's own label overrides its subtree. 20-applications.png shows the state is otherwise a small coloured dot on the rail icon. The corresponding detail on 05-computers.aria.txt is likewise only inside names: `button \"Computer offline Bozhidars-MacBook-Air computer offline\" [ref=e57]`.",
+      "recommendation": "Fold the alert into the button name (`aria-label=\"Computers — 1 offline, needs attention\"`) or expose the badge as a live `status` sibling. Also de-duplicate the Computers row name, which currently says 'offline' twice."
+    },
+    {
+      "id": "accessibility-054",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "04-members",
+        "14-create-channel",
+        "19-administration",
+        "21-mcp"
+      ],
+      "category": "1.3.1 Info and Relationships (A); 3.3.2 Labels or Instructions (A)",
+      "title": "Counts and suffixes are concatenated without separators, producing garbled announcements",
+      "evidence": "19-administration.aria.txt: `generic [ref=e124]: Owners & Admins2`. 21-mcp.aria.txt: `generic [ref=e125]: MCP servers0` and `generic [ref=e144]: Recommended2`. 04-members.aria.txt: `button \"Bobby Ivanov(you)\" [ref=e151]` and `generic [ref=e157]: Bobby Ivanov(you)`. 14-create-channel.aria.txt: `generic [ref=e1220]: Description(optional)`, `generic [ref=e1232]: Members(optional)`. These read aloud as 'Owners and Admins two', 'MCP servers zero', 'Bobby Ivanovyou'. Note the sidebar does this correctly — `button \"Channels 1\" [expanded] [ref=e82]` keeps the count as a separate node.",
+      "recommendation": "Separate the count from the label with whitespace and a descriptive form ('Owners & Admins, 2'), and insert a space before '(you)' and '(optional)'."
+    },
+    {
+      "id": "accessibility-055",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "04-members"
+      ],
+      "category": "4.1.2 Name, Role, Value (A)",
+      "title": "Members section toggles omit the expanded state used elsewhere for the same pattern",
+      "evidence": "04-members.aria.txt: `button \"Agents 1\" [ref=e59]` and `button \"Humans 1\" [ref=e144]` are collapsible group headers with no state. The structurally identical sidebar controls do expose it: `button \"Joint Channels 0\" [expanded] [ref=e66]`, `button \"Channels 1\" [expanded] [ref=e82]`, `button \"Direct Messages 1\" [expanded] [ref=e105]` (01-chat-channel.aria.txt). Same inconsistency for `button \"Pinned 0\" [expanded] [ref=e57]` vs `button \"Saved\" [ref=e53]`.",
+      "recommendation": "Add `aria-expanded` to the Agents/Humans group toggles so the disclosure state matches the convention already established in the sidebar."
+    },
+    {
+      "id": "accessibility-056",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "15-appearance"
+      ],
+      "category": "2.4.4 Link Purpose (A); 4.1.2 Name, Role, Value (A)",
+      "title": "Static font-size preview contains real focusable controls including a dead link",
+      "evidence": "15-appearance.aria.txt, inside `generic \"Message font size preview\":` — `button \"Online\":`, `button \"Cindy\"`, and `link \"#proj-uiux\": /url: \"#\"`. These are non-functional demo elements but sit in the tab order and expose operable roles; the link's href is '#', so activating it does nothing and may move focus to the document top. The preview's own container is a `generic` with an aria-label rather than a labelled group.",
+      "recommendation": "Render the preview with non-interactive markup (`<span>`/`<div>`) or apply `inert` to the preview container, and drop the `href=\"#\"` anchor entirely."
+    },
+    {
+      "id": "accessibility-057",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "06-search",
+        "20-applications"
+      ],
+      "category": "3.3.2 Labels or Instructions (A); 3.2.4 Consistent Identification (AA)",
+      "title": "Search field uses a placeholder-only label and a different role than the app's other search box",
+      "evidence": "06-search.aria.txt: `textbox \"Search channels, DMs, messages… ⌘K\" [active] [ref=e57]:` with `/placeholder: Search channels, DMs, messages…   ⌘K` — role `textbox`, name derived from placeholder, and the keyboard shortcut baked into the name. 20-applications.aria.txt uses the correct pattern for the same job: `searchbox \"Search connected apps\" [ref=e148]`. 06-search also renders a dismiss affordance as non-interactive text: `generic: Esc`.",
+      "recommendation": "Use `role=\"searchbox\"` with a persistent (visually-hidden if needed) label 'Search channels, DMs and messages', expose the ⌘K shortcut via `aria-keyshortcuts` instead of the name, and make 'Esc' either a real close button or `aria-hidden`."
+    },
+    {
+      "id": "accessibility-058",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "06-search"
+      ],
+      "category": "4.1.2 Name, Role, Value (A); 3.2.4 Consistent Identification (AA)",
+      "title": "Search filter buttons mix value-naming and action-naming and expose no popup state",
+      "evidence": "06-search.aria.txt: four filters are named by their current value — `button \"From\" [ref=e61]`, `button \"Scope\" [ref=e70]`, `button \"Any Time\" [ref=e86]`, `button \"Relevant\" [disabled] [ref=e93]` — while the fifth is named by its action, `button \"Open channel filter\" [ref=e78]` even though its visible text is `generic [ref=e82]: Channel`. None carries `[expanded]` or `haspopup`, despite each rendering a chevron (`img [ref=e83]`) indicating a menu.",
+      "recommendation": "Pick one convention (e.g. `aria-label=\"Date filter: Any Time\"` for all five) and add `aria-haspopup=\"listbox\"` plus `aria-expanded` so the menu state is announced."
+    },
+    {
+      "id": "accessibility-059",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "11-channel-tasks-tab",
+        "12-channel-files-tab",
+        "13-dm-cindy",
+        "14-create-channel"
+      ],
+      "category": "2.4.6 Headings and Labels (AA); 4.1.2 Name, Role, Value (A)",
+      "title": "Non-descriptive 'button \"2\"' for the channel members control",
+      "evidence": "01-chat-channel.aria.txt channel header: `button \"2\" [ref=e220]:` → `img [ref=e221]`, `generic [ref=e226]: \"2\"`. Its four siblings are all descriptively named (`button \"Search this channel\"`, `button \"Mute activity for this channel\"`, `button \"Stop all agents in this channel\"`, `button \"Edit channel\"`), so this one control announces simply as 'two, button'.",
+      "recommendation": "Name it `aria-label=\"Channel members (2)\"`, consistent with its siblings."
+    },
+    {
+      "id": "accessibility-060",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "18-billing"
+      ],
+      "category": "1.1.1 Non-text Content (A); 1.3.1 Info and Relationships (A)",
+      "title": "Plan inclusion is conveyed only by unlabelled icons",
+      "evidence": "18-billing.aria.txt: under `generic [ref=e133]: Included` each row is `generic [ref=e135]:` → `img [ref=e136]`, `generic [ref=e138]: Channels`; under `generic [ref=e164]: Not included` the rows are structurally identical — `generic [ref=e166]:` → `img [ref=e167]`, `generic [ref=e170]: Higher file upload limits`. Neither icon has a name, neither group heading is a heading, and neither list is a `list`, so 'Channels' and 'Higher file upload limits' are indistinguishable in a linear read.",
+      "recommendation": "Mark each group with an `<h4>` and a `<ul>`, and give the icons text alternatives ('Included' / 'Not included') or add visually-hidden text to each row."
+    },
+    {
+      "id": "accessibility-061",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "01-chat-channel",
+        "04-members",
+        "18-billing",
+        "20-applications"
+      ],
+      "category": "1.3.1 Info and Relationships (A)",
+      "title": "Sidebar, member and marketplace collections are not exposed as lists",
+      "evidence": "01-chat-channel.aria.txt renders the conversation list as sibling buttons under plain wrappers (`generic [ref=e81]`, `button \"onboarding-owner\" [ref=e96]`, `generic [ref=e104]`, `button \"Cindy Onboarding Assistant Offline\" [ref=e116]`) with no `list`/`listitem`. 04-members, 18-billing and 20-applications repeat this. By contrast, message bodies do use proper list markup (`list [ref=e1155]:` with `listitem [ref=e1156]` …), so the app already has the pattern available.",
+      "recommendation": "Wrap each collection in `<ul>`/`<li>` so screen readers announce item counts and position ('1 of 3')."
+    },
+    {
+      "id": "accessibility-062",
+      "cluster": "accessibility",
+      "severity": "medium",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "11-channel-tasks-tab",
+        "12-channel-files-tab",
+        "13-dm-cindy",
+        "14-create-channel",
+        "15-appearance"
+      ],
+      "category": "4.1.3 Status Messages (AA)",
+      "title": "Status regions are empty on every screen; no live announcement for saves or new messages",
+      "evidence": "Two `status` nodes exist in the chat shell on every chat screen and are empty on all of them: `status [ref=e189]` (sidebar, after the DM list) and `status [ref=e238]` (below the tablist). No screen shows any content in them, including 12-channel-files-tab after switching tabs. Meanwhile, state changes are rendered as inert text: 15-appearance shows `generic [ref=e137]: Saved on this device.` and `generic [ref=e145]: Saved on this device.` outside any live region, and 16-notifications shows the push state as `generic [ref=e132]: Disabled`.",
+      "recommendation": "Route 'Saved on this device.', tab-switch results, and new-message arrivals through the existing `status` containers (or add `role=\"status\"` to the save-confirmation nodes) so they are announced without moving focus."
+    },
+    {
+      "id": "chat-063",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "10-thread",
+        "01-chat-channel"
+      ],
+      "category": "affordance",
+      "title": "Messages cannot be edited or deleted — a bad instruction to an agent is permanent",
+      "evidence": "The full per-message action set is three buttons: `Reply in thread`, `Add Reaction`, `Save Message` (10:122-127). Grepping all six snapshots for `Edit message`, `Delete`, `Copy link`, `More actions` returns zero matches, and the visual read confirms \"It contains 3 icon buttons.\" There is no overflow menu. In a surface whose messages are instructions that agents act on and carry forward as context (see the agent's own recap at 01:283-295 replaying prior turns), a mistyped or wrong instruction can be neither corrected nor withdrawn.",
+      "recommendation": "Add an overflow (`…`) action on own messages with Edit, Delete, and Copy link. Edits to a message an agent has already consumed should show an \"edited\" marker so the divergence between what was said and what was acted on stays visible."
+    },
+    {
+      "id": "chat-064",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "12-channel-files-tab",
+        "10-thread"
+      ],
+      "category": "affordance",
+      "title": "Files tab drops the preview affordance the chat surface has, and offers no upload, delete, sort, or search",
+      "evidence": "In chat the same artifact renders as `button \"team-mode.html HTML preview · 556 KB\" [ref=e1400]` with an eye icon (10:367-373). On the Files tab it degrades to `button \"team-mode.html 556 KB 19 Jul, 13:15\" [ref=e244]` with only `button \"Jump to original message\" [ref=e259]` and `button \"Download file\" [ref=e264]` (12:106-119) — the preview is gone. Visual inspection of the tab: \"There are no header rows, column titles, sort controls (e.g. sort by date/size), search bars, filters, or file upload buttons/drag-and-drop areas visible on this pane\", and \"There is no uploader name, profile avatar, or author identity shown for the file.\"",
+      "recommendation": "Reuse the chat file-chip component on this tab so preview behaves identically in both places. Add an uploader column (critical when agents generate artifacts — you need to know which agent produced a 556 KB file), sort by name/size/date, a filter box, drag-and-drop upload, and a delete action."
+    },
+    {
+      "id": "chat-065",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "09-channel-back",
+        "01-chat-channel"
+      ],
+      "category": "density-layout",
+      "title": "Only two messages fit on screen, and header grouping is inconsistent",
+      "evidence": "Measured on the 1706×960 capture: header+tabs occupy y 0–114, the scrollable message list y 114–726 (612px), the composer y 726–879 (153px), and the notification banner y 879–944 (65px). Exactly two messages are visible at once, each consuming ~210px. Grouping is unpredictable: Cindy's first three messages are all stamped `19/07 13:15` yet each repeats the full avatar+name+`Onboarding Assistant`+timestamp header (01:110-117, 118-126, 133-140), while later runs by the same author *do* collapse to a bare time — `19/07 13:41` followed by `generic: 13:42` with no header (01:186-190), and `19/07 13:50` followed by `generic: 13:50` (01:204-208). So header presence cannot be used as a \"new turn\" signal.",
+      "recommendation": "Apply one grouping rule consistently (same author within N minutes and no intervening message → time-only continuation) and honour it for the burst at 13:15. Reclaim the ~60px per suppressed header. The 153px always-on composer is also oversized for an empty single-line state — start at one line and grow to a cap."
+    },
+    {
+      "id": "chat-066",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "10-thread"
+      ],
+      "category": "accessibility",
+      "title": "Thread panel title has a different accessible name than its visible text, and truncates the channel",
+      "evidence": "10:333-335: `button \"Scroll thread to first message\" [ref=e1217]` whose visible children are `text: Thread` and `generic: \"— #onboarding-owner\"`. The accessible name shares no words with the visible label, so voice-control users saying \"click Thread\" cannot activate it (WCAG 2.5.3 Label in Name). Visually the label is also cut: \"Header Text: `Thread— #onboard` (the word `#onboarding-owner` appears to be truncated or cut off after `#onboard`)\".",
+      "recommendation": "Make the accessible name start with the visible text: `aria-label=\"Thread — #onboarding-owner (scroll to first message)\"`. Let the channel name wrap or middle-truncate rather than clipping the identifying suffix, since the panel's only job is to tell you which conversation you are in."
+    },
+    {
+      "id": "chat-067",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "11-channel-tasks-tab",
+        "12-channel-files-tab"
+      ],
+      "category": "accessibility",
+      "title": "Tabs have no tab panels — Chat/Tasks/Files content is not associated with the tab that opened it",
+      "evidence": "`tablist [ref=e228]` with `tab \"Chat\"`, `tab \"Tasks\" [selected]`, `tab \"Files\"` (11:91-103) is followed immediately by plain `generic [ref=e239]` holding the task toolbar and empty state (11:105); on the Files tab the content is `generic [ref=e243]` (12:105). No `tabpanel` role, no `aria-controls`, no `aria-labelledby` in either snapshot.",
+      "recommendation": "Give the content container `role=\"tabpanel\"` with `aria-labelledby` pointing at the active tab and `aria-controls` on each tab. Make the panel focusable so activating a tab can move review order into the new content."
+    },
+    {
+      "id": "chat-068",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "11-channel-tasks-tab"
+      ],
+      "category": "empty-error-state",
+      "title": "Tasks empty state teaches one of two creation paths and hides the board's structure",
+      "evidence": "The empty state reads `No tasks yet` / `Create one with the New Task button.` (11:129-130) — it points at a button instead of being one, and it never mentions the other creation path that exists two panes away: the channel composer's `checkbox \"As Task\" [ref=e1182]` (01:306). `radio \"Board\" [checked]` is selected but the pane renders no columns at all, so nothing conveys what states a task moves through. `button \"Creator\"` and `button \"Assignee\"` render fully enabled against zero tasks — visual read: \"they are rendered with black text, black icons, and clear borders rather than being grayed out.\" Roughly 80% of the pane below the toolbar is blank.",
+      "recommendation": "Make the empty state carry the action itself (a primary \"New task\" button in the empty state) and name both routes: \"…or tick As Task in the message composer to turn a message into one.\" Render the empty board's columns so the lifecycle is visible before the first task exists. Disable Creator/Assignee filters at zero results."
+    },
+    {
+      "id": "chat-069",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "14-create-channel"
+      ],
+      "category": "affordance",
+      "title": "Create Channel offers no humans and gives no confirmation that an agent was added",
+      "evidence": "The Members section contains `textbox \"Search members by name\"` and a single group `generic [ref=e1237]: Agents` holding `button \"Cindy\" [ref=e1238]` (14:346-354). Cindy is a plain `button` — not a `checkbox`, `option`, or anything carrying `aria-pressed`/`aria-selected` — and the visual read confirms \"there is no checkbox or visible selected state indicator next to her name.\" No human group exists, although the current channel header shows `button \"2\"` (14:88-89) i.e. two members, and Bobby Ivanov posts throughout the channel.",
+      "recommendation": "List humans and agents in separate labelled groups, both searchable. Represent each candidate as a toggle with a real checked state (`role=\"checkbox\"` / `aria-pressed`) and show selected members as removable chips above the search field so the pending membership is visible before Create."
+    },
+    {
+      "id": "chat-070",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "14-create-channel"
+      ],
+      "category": "copy",
+      "title": "Public vs. Private is an unexplained choice in a workspace that also has \"Joint Channels\"",
+      "evidence": "14:334-344 renders label `Visibility` with two cards, `Public` (checked) and `Private`, and nothing else — \"There is no explanatory text describing what 'Public' or 'Private' means under or near the controls.\" The same app simultaneously exposes a separate `button \"Joint Channels 0\"` sidebar section with `generic: No joint channels yet` (14:60-63 region) and describes the current channel as \"Your private onboarding space\" (14:78). Three overlapping sharing concepts, zero definitions, and the more-exposing option is the default.",
+      "recommendation": "Put one line of consequence copy under each card — \"Public: anyone in raft-bobby-test can find and join\" / \"Private: only invited people and agents\" — and state whether the choice can be changed later. If Joint Channels is a third sharing mode, name it here so users understand the taxonomy at the moment of choice."
+    },
+    {
+      "id": "chat-071",
+      "cluster": "chat",
+      "severity": "medium",
+      "screens": [
+        "10-thread"
+      ],
+      "category": "density-layout",
+      "title": "\"Back to bottom\" pill overlays message text instead of clearing it",
+      "evidence": "`button \"Back to bottom\" [ref=e1177]` (10:305-307) is a centred floating pill in the main column. Visual inspection: \"the pill overlaps the message from Bobby Ivanov … The visible text reads: `Can you check that everythi` [Back to bottom] `up is correct I had multiple`\" — it blanks the characters covering \"ng on my laptop set\".",
+      "recommendation": "Anchor the pill in the gutter above the composer with the message list bottom-padded to match, or right-align it clear of the text column. A jump-to-latest control should never occlude the content it is helping you leave."
+    },
+    {
+      "id": "navigation-072",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "06-search.png"
+      ],
+      "category": "empty-error-state",
+      "title": "Search's empty state paraphrases the input directly above it",
+      "evidence": "Placeholder: \"Search channels, DMs, messages…   ⌘K\". Seven hundred pixels below, the empty state reads `paragraph [ref=e105]: Search everything` and `paragraph [ref=e106]: Search channels, DMs, people, agents, and message history.` No recent searches, no suggested queries, no operator syntax — despite From/Scope/Channel/Any Time filters implying a query grammar exists.",
+      "recommendation": "Spend the canvas on something the placeholder cannot say: recent searches, saved searches, and 3-4 worked examples of the filter grammar (`from:Cindy`, `in:#onboarding-owner`, `before:last week`). Restating the field label in the results area is pure redundancy in the most valuable space on the screen."
+    },
+    {
+      "id": "navigation-073",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "06-search.png"
+      ],
+      "category": "feedback-state",
+      "title": "The sort control is disabled with no reason, in a row of enabled controls that are equally useless",
+      "evidence": "`button \"Relevant\" [disabled] [ref=e93]`, rendered at 2.43:1, sits beside `button \"From\"`, `button \"Scope\"`, `button \"Open channel filter\"` and `button \"Any Time\"` — all enabled, all acting on zero results. Nothing states that sort activates after a query.",
+      "recommendation": "Make enablement consistent: either all filters are live pre-query or none are. If sort genuinely requires results, keep it enabled and let it be a no-op, or attach a reason (\"Sorting available once you search\"). A greyed control with no explanation reads as broken, not deferred."
+    },
+    {
+      "id": "navigation-074",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "06-search.png"
+      ],
+      "category": "consistency",
+      "title": "Filter chips mix field names with selected values, so you cannot tell what is set",
+      "evidence": "The row reads From / Scope / Channel / Any Time. Three are field names (`generic [ref=e66]: From`, `generic [ref=e74]: Scope`, `generic [ref=e82]: Channel`); \"Any Time\" (`generic [ref=e89]`) is a selected value. All four render in the identical unset chip style.",
+      "recommendation": "Adopt one convention — show the field name when unset and switch to `Field: value` with an active treatment when set. Also rename or define \"Scope\": it sits between \"From\" and \"Channel\", which are the two things scope could plausibly mean, and both From and Scope use identity-style glyphs (person-in-circle and @)."
+    },
+    {
+      "id": "navigation-075",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "02-activity.png",
+        "03-tasks.png",
+        "04-members.png",
+        "05-computers.png",
+        "06-search.png"
+      ],
+      "category": "affordance",
+      "title": "Icon-only rail with no labels, no expand, and an Activity glyph that reads as system health",
+      "evidence": "Six destinations render as bare glyphs with no visible text on any screen and no expand/collapse control in any ARIA tree. Activity's glyph is a pulse/waveform — conventionally monitoring or metrics — positioned between a speech bubble (Chat) and a checkbox (Tasks), while the actual health destination (`button \"Computers\"`) is a monitor glyph two positions further down.",
+      "recommendation": "Offer a labeled rail mode (expandable, remembered per user), or at minimum show labels for the first sessions. Swap the Activity waveform for an inbox/bell metaphor: as shipped it actively mispredicts, and a new user has to click all six destinations to build a map of the product."
+    },
+    {
+      "id": "navigation-076",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "02-activity.png",
+        "03-tasks.png",
+        "04-members.png",
+        "05-computers.png",
+        "06-search.png"
+      ],
+      "category": "accessibility",
+      "title": "Navigation destinations are toggle buttons announced as 'pressed', not as the current page",
+      "evidence": "Every rail item is a button with `aria-pressed`: `button \"Activity\" [active] [pressed]` on 02, `button \"Tasks\" [active] [pressed]` on 03, `button \"Members\" [active] [pressed]` on 04, `button \"Computers\" [active] [pressed]` on 05, `button \"Search\" [pressed]` on 06.",
+      "recommendation": "Use `aria-current=\"page\"` on links, or a proper `tablist`/`tab` pattern. Combined with the missing headings, a screen-reader user currently gets 'button, pressed' and no page title — no reliable answer to 'where am I'."
+    },
+    {
+      "id": "navigation-077",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "02-activity.png"
+      ],
+      "category": "feedback-state",
+      "title": "With the default 'All' filter there is no read/unread differentiation at all",
+      "evidence": "The header claims \"2 active\" and a dedicated `radio \"Unread\"` filter exists, but both rows render with identical 1px border, identical white fill, and identical title weight — no dot, no bold, no accent. Nothing in the row ARIA (`button [ref=e72]`, `button [ref=e91]`) carries a read/unread state.",
+      "recommendation": "Mark unread rows explicitly (accent bar, bold title, or an unread dot) and expose the state to AT. Otherwise the default view — 'All', which is preselected — is the one view where the user cannot tell which items are the '2 active' ones."
+    },
+    {
+      "id": "navigation-078",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "03-tasks.png"
+      ],
+      "category": "empty-error-state",
+      "title": "Board and List produce identical nothing, and the Board renders no columns",
+      "evidence": "`radio \"Board\" [checked]` is the default view, yet the canvas shows only the centered empty state — no swimlanes, no column headers, no structure of any kind. Switching to `radio \"List\"` has nothing different to show.",
+      "recommendation": "Render the empty board with its columns (To do / In progress / Done). An empty board that omits its own columns teaches nothing about the task lifecycle, makes the view toggle look inert, and wastes the best opportunity to explain the model before the first task exists."
+    },
+    {
+      "id": "navigation-079",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "02-activity.png",
+        "03-tasks.png",
+        "04-members.png",
+        "05-computers.png",
+        "06-search.png"
+      ],
+      "category": "affordance",
+      "title": "Workspace identity is invisible and the switcher reads as a logo",
+      "evidence": "`button \"Switch server (current: raft-bobby-test)\" [ref=e7]` renders as a black tile containing the single letter \"R\" — no chevron, no caret, no name. The string \"raft-bobby-test\" appears nowhere on screen in any of the five screenshots; it exists only in the accessible name.",
+      "recommendation": "Show the server name (on hover at minimum, ideally persistently in the destination header) and add a switcher affordance such as a chevron. This app executes work on named machines and agents; a user with two servers has no on-screen confirmation of which one they are acting in."
+    },
+    {
+      "id": "navigation-080",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "04-members.png",
+        "05-computers.png"
+      ],
+      "category": "density-layout",
+      "title": "Names truncate in a 300px column while 78% of the window sits empty",
+      "evidence": "Rendered: \"Cindy Onboarding Assis…\", \"Bobby Ivanov (y…\", \"Bozhidars-MacBook…\". ARIA carries the full values — `button \"Cindy Onboarding Assistant Offline\"`, `generic [ref=e157]: Bobby Ivanov(you)`, `generic [ref=e64]: Bozhidars-MacBook-Air`. The list pane measures 78→378px of a 1706px viewport; the remaining 1328px shows only \"SELECT A CHANNEL\".",
+      "recommendation": "Let the list pane grow (or the rows wrap) when the detail pane has no content. Ellipsizing the only human's name and the only agent's role on a 1706px display, next to 1300px of blank space, is a pure layout failure — and the machine name is the exact string a user needs to identify the offline host."
+    },
+    {
+      "id": "navigation-081",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "02-activity.png",
+        "03-tasks.png",
+        "04-members.png",
+        "05-computers.png",
+        "06-search.png"
+      ],
+      "category": "consistency",
+      "title": "Five peer rail destinations render two different page architectures",
+      "evidence": "Activity, Tasks and Search are full-width single panes with a header and a filter row. Members and Computers are a narrow list pane plus a second, empty detail pane (`generic [ref=e162]: Select a channel` / `generic [ref=e71]: Select a channel`). Their titles also differ structurally: Activity/Tasks use `heading [level=2]` with a subtitle count; Members/Computers use a plain `generic` with no subtitle.",
+      "recommendation": "Pick one shell for rail-level destinations. As shipped, moving sideways in the rail changes the page architecture, so the user re-learns the layout per destination and only two of five imply a selectable detail."
+    },
+    {
+      "id": "navigation-082",
+      "cluster": "navigation",
+      "severity": "medium",
+      "screens": [
+        "02-activity.png",
+        "03-tasks.png",
+        "05-computers.png"
+      ],
+      "category": "copy",
+      "title": "One concept, three vocabularies, across the same screen",
+      "evidence": "Activity: header \"2 active\", filter `radio \"Unread\"`, row action `button \"Mark as Done\"`. Computers: rail `\"Computers need attention: 1 offline\"`, row `computer offline` (lowercase), Members chip `generic \"Offline\"`. Tasks: header \"0 channel tasks\" vs empty state \"No tasks yet\" vs body \"server-wide view\".",
+      "recommendation": "Settle one term per concept and use it in the count, the filter, and the action. As shipped the user cannot predict whether 'Mark as Done' decrements the '2 active' counter, clears the item from 'Unread', or both."
+    },
+    {
+      "id": "settings-083",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "16-notifications",
+        "20-applications",
+        "19-administration"
+      ],
+      "category": "visual-hierarchy",
+      "title": "Enabled primary buttons and disabled buttons are the same pink, 1.56:1 apart; the same pink also marks the selected nav item",
+      "evidence": "Sampled fills: the enabled CTA \"Enable Push Notifications\" is #FE7DA8, the disabled \"Save\" beside it is #FFBED3 — contrast between the two states is 1.56:1. The active nav item fill is also exactly #FE7DA8, as are \"Install\" and \"Register app\" on 20-applications. So on the Applications screen the pink \"Applications\" nav item, the pink \"Register app\" button and three pink \"Install\" rectangles are one colour carrying three meanings (you are here / primary action / fake label). Disabled label text measures 2.55:1 (#808080 on #FFBED3) on both \"Save\" and \"Update Role\". Cost: users click disabled Saves expecting a primary action, and skip enabled pink CTAs believing they are inert.",
+      "recommendation": "Reserve the saturated pink for one job — primary action. Give the selected nav item a different treatment (border weight + neutral fill). Render disabled buttons as neutral grey with a visibly different border rather than a tint of the primary, keeping the state difference above 3:1."
+    },
+    {
+      "id": "settings-084",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "07-settings",
+        "17-server-profile"
+      ],
+      "category": "affordance",
+      "title": "Username and Slug are editable text fields styled to look disabled",
+      "evidence": "'textbox [ref=e151]: bobby-ivanov' (07-settings.aria.txt:94) and 'textbox [ref=e150]: raft-bobby-test' (17-server-profile.aria.txt:93) both carry real values and neither is marked disabled. But they render as #646464 text on a #F9FAFB fill behind an inert prefix chip (@ / /), while the sibling Display Name and Name fields render #141111 on #FFFFFF inside a heavy black border — an 18.78:1 field directly above a 5.66:1 field that reads as greyed-out placeholder text. Cost: users conclude their handle and their workspace URL are fixed and stop trying.",
+      "recommendation": "Use one input treatment for all editable fields — same fill, border weight and text colour — with the prefix as an attached affix rather than a colour change. Reserve the grey fill exclusively for genuinely read-only fields, like the Email row, which correctly renders as static text plus a Verified badge."
+    },
+    {
+      "id": "settings-085",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "17-server-profile"
+      ],
+      "category": "copy",
+      "title": "Slug is freely editable with no warning that existing workspace URLs break",
+      "evidence": "The Slug field 'textbox [ref=e150]: raft-bobby-test' sits under the bare label \"Slug\" with no helper text (17-server-profile.aria.txt:90-93), while the workspace identity above it is displayed as \"/raft-bobby-test\" (line 84) — i.e. it is the URL. Twelve lines lower the same pane wraps deletion in a Danger Zone with \"Permanently remove this server and all its data. This cannot be undone.\" (line 102). Cost: renaming the slug is one keystroke plus Save, silently invalidating every bookmark, invite link and deep link into the workspace, with none of the caution the pane demonstrably knows how to write.",
+      "recommendation": "Add helper text under Slug stating that existing links stop working, and require a confirmation step showing old and new URL. If old slugs redirect, say so — that turns a scary change into a safe one."
+    },
+    {
+      "id": "settings-086",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "17-server-profile",
+        "19-administration"
+      ],
+      "category": "consistency",
+      "title": "Destructive actions get inconsistent protection: Delete Server is a Danger Zone, Remove Admin is a plain outline button",
+      "evidence": "17-server-profile.aria.txt:96-105 gives deletion an icon-marked \"Danger Zone\" section, a warning paragraph and a red 'button \"Delete Server\"'. Revoking an admin's privileges gets 'button \"Remove Admin\" [ref=e231]' (19-administration.aria.txt:102) — default outline styling, no section warning, no confirmation signal in the label or via aria-haspopup, flush right on a member row. Neither button reports [cursor=pointer] in the snapshot, while 'link \"Documentation\" [ref=e98] [cursor=pointer]' and the Appearance switch do — so the hover cursor does not change on the destructive controls either. Cost: a mis-click on a member row strips admin from an agent that may be running workspace onboarding (Cindy is the configured Human Onboarding Agent, 19-administration.aria.txt:164).",
+      "recommendation": "Tier destructive actions explicitly: irreversible (Delete Server) gets type-to-confirm; reversible-but-privileged (Remove Admin) gets a confirmation popover naming the member and the consequence, plus danger styling. Restore `cursor: pointer` on all buttons — currently the only hover affordance in Settings is on one link and one switch."
+    },
+    {
+      "id": "settings-087",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "16-notifications",
+        "15-appearance",
+        "18-billing",
+        "20-applications"
+      ],
+      "category": "consistency",
+      "title": "Yellow #FFD440 means \"selected\" everywhere except on the Notifications badge, where it means \"off\"",
+      "evidence": "Sampled fills are identical (#FFD440) for the selected \"Medium\" font-size chip (15-appearance), the selected \"Yearly\" billing chip (18-billing), the selected \"Marketplace\" tab (20-applications) — and for the \"DISABLED\" status badge on 16-notifications, whose ARIA is 'generic [ref=e132]: Disabled' (16-notifications.aria.txt:81). Cost: the yellow pill reads as an active/selected chip in the exact spot users scan for on/off state, so push being off can be misread as on; the user then wonders why nothing arrives.",
+      "recommendation": "Give status badges their own neutral-vs-positive scale (grey \"Off\", green \"On\") distinct from the yellow selection token, and put the meaning in the text — \"Push: off\" rather than a bare \"DISABLED\"."
+    },
+    {
+      "id": "settings-088",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "18-billing"
+      ],
+      "category": "copy",
+      "title": "Billing defaults to the largest commitment and quotes a price it does not charge",
+      "evidence": "'radio \"Yearly Save 12%\" [checked] [ref=e210]' is pre-selected (18-billing.aria.txt:140) and Seats to buy is pre-filled with \"2\" (line 149). The helper text says \"Each seat is $10/month\" (line 150) while the checkout summary total reads \"$240 / year\" struck against \"$211.20 / year\" (lines 169-170). Cost: a user who reads \"$10/month\", sees 2 seats and presses \"Upgrade to Pro\" commits to a $211.20 annual charge, not $20. The monthly figure is the only price stated in the form itself; the annual figure appears only in a side panel.",
+      "recommendation": "State the charge in the primary flow: put \"You will be charged $211.20 today, then annually\" directly above the Upgrade button and carry the amount in the button label. Default to Monthly, or if Yearly stays default, show both totals inline beside the two radios."
+    },
+    {
+      "id": "settings-089",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "18-billing"
+      ],
+      "category": "copy",
+      "title": "Seat capacity is stated ambiguously and the checkout summary repeats the ambiguity instead of resolving it",
+      "evidence": "\"2 seats selected. Each seat covers 1 human or 10 agents. Current usage requires at least 2 seats. Each seat is $10/month.\" (18-billing.aria.txt:150), and the summary restates \"Capacity / up to 2 Humans / or 20 Agents\" (lines 164-165). Neither says whether a mixed team of 1 human + 10 agents fits in 2 seats or 1, nor how the \"at least 2\" was derived from actual membership. Cost: on the only screen that takes money, the buyer cannot compute the seat count they need and will over- or under-buy.",
+      "recommendation": "Show the derivation — \"You currently have 1 human and 1 agent → 2 seats required\" — and express capacity as a single consumable with a live meter rather than an unexplained \"or\"."
+    },
+    {
+      "id": "settings-090",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "21-mcp"
+      ],
+      "category": "copy",
+      "title": "MCP Servers explains none of its own vocabulary and carries no trust statement",
+      "evidence": "The pane's entire explanation is \"Configure the MCP catalog, credentials, and provider connections for this Raft Server.\" (21-mcp.aria.txt:80) and the empty state \"Add a Streamable HTTP server or start from a recommended integration.\" (line 84). \"MCP\" is never expanded, \"Streamable HTTP server\" is unglossed, there is no link to https://docs.raft.build from this pane, and nothing states which agents gain access to a connected server or where credentials are stored. The recommended entries describe only the vendor's capability — \"Search and update the Notion workspace you authorize.\" (line 96). Cost: an admin wires a live Notion or Linear credential into the workspace with no statement of blast radius, on a pane strictly riskier than Applications — which does get a trust line.",
+      "recommendation": "Open the pane with one plain sentence: what an MCP server is, that adding one lets this workspace's agents call those tools, and who can use it. Add a docs link. Add per-server disclosure of which agents may invoke it and how credentials are held."
+    },
+    {
+      "id": "settings-091",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "19-administration"
+      ],
+      "category": "empty-error-state",
+      "title": "Pre-join Agreement can be required, but its text cannot be read or written from the pane",
+      "evidence": "The section offers exactly one control — 'checkbox \"Require agreement before joining New invite-link and community joins must accept the current version before membership is created.\" [ref=e292]' — plus \"Saving creates a new version; previous accepted versions remain auditable.\" and a disabled Save (19-administration.aria.txt:144-150). There is no textarea, no preview, no \"current version\" link. Cost: an admin can gate all new joins on a document they cannot see, and the copy's reference to \"the current version\" points at content with no representation on screen.",
+      "recommendation": "Put the agreement body in this section — an editor showing the current version, its number and effective date, and a preview of what a joiner sees. Requiring acceptance of an invisible document is not a shippable state."
+    },
+    {
+      "id": "settings-092",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "19-administration",
+        "20-applications"
+      ],
+      "category": "accessibility",
+      "title": "Every custom select leaks a raw-value text field into the accessibility tree",
+      "evidence": "Beside each styled combobox sits an exposed textbox holding the machine value: 'textbox [ref=e320]: 06e3d009-7002-44ee-98db-9ef19a4ba294' under Human Onboarding Agent, 'textbox [ref=e332]: \"yes\"' under New Agent Greeting, 'textbox [disabled] [ref=e141]: admin' in the role picker (19-administration.aria.txt:166,176,89), and 'textbox [ref=e156]: all' beside the category filter (20-applications.aria.txt:102). None are labelled. Cost: a screen-reader user tabs past the Onboarding select into an unlabelled edit field and hears a 36-character UUID read out; the pattern adds a phantom field to every select in the cluster.",
+      "recommendation": "These are hidden form-value inputs never removed from the tree. Mark them `aria-hidden=\"true\"` and `tabindex=\"-1\"`, or move the value onto the combobox itself."
+    },
+    {
+      "id": "settings-093",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "07-settings"
+      ],
+      "category": "accessibility",
+      "title": "Sidebar group labels — the entire IA taxonomy — are the least legible text on the screen",
+      "evidence": "\"PERSONAL\", \"WORKSPACE\" and \"ABOUT\" ('generic [ref=e55]: Personal', line 73 Workspace, line 94 About) measure #99968F on #FFFAEF = 2.84:1, small and letter-spaced. WCAG AA for normal text is 4.5:1. Cost: the Personal-vs-Workspace distinction is the single thing that tells a user whether a change affects only them or the whole team, and it is rendered below the legibility floor while the twelve item labels beneath it are near-black.",
+      "recommendation": "Bring group labels to at least 4.5:1 and increase their size, or replace the colour-only grouping with a visible divider plus a near-black label. The scope signal must be at least as legible as the item it scopes."
+    },
+    {
+      "id": "settings-094",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "15-appearance"
+      ],
+      "category": "feedback-state",
+      "title": "The only confirmation that Appearance saved anything fails contrast and never announces",
+      "evidence": "\"Saved on this device.\" ('generic [ref=e137]', 15-appearance.aria.txt:90, repeated at 113) measures #8C8C8C on #FFFFFF = 3.36:1, below the 4.5:1 AA floor, and is exposed as a plain generic — not a live region — so it never announces on change. Cost: in the one pane with no Save button, the sole evidence that a change persisted is dim, silent and easy to miss, leaving the user to toggle the control again to check.",
+      "recommendation": "Darken to at least 4.5:1 and make it a transient `role=\"status\"` confirmation fired on change (\"Font size set to Large — saved on this device\") rather than a permanent grey caption carrying no event."
+    },
+    {
+      "id": "settings-095",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "19-administration"
+      ],
+      "category": "accessibility",
+      "title": "Disabled-state and status text across Administration sit between 1.7:1 and 2.6:1",
+      "evidence": "Measured: \"No members to promote\" #C5C5C5 on #FFFFFF = 1.73:1 ('button \"No members to promote\" [disabled] [ref=e130]', line 81); \"Last owner\" #A4A4A4 on #FFFFFF = 2.49:1 (line 97); the disabled \"Update Role\" label 2.55:1. Cost: \"Last owner\" is the explanation for why the owner row has no remove control — the safety rationale is the hardest text on the pane to read — and \"No members to promote\", the pane's only empty-state message, is effectively invisible.",
+      "recommendation": "Disabled controls may drop to 3:1, but explanatory status text like \"Last owner\" is content, not a control — bring it to 4.5:1 and pair it with a lock or shield icon so the reason survives a low-contrast display."
+    },
+    {
+      "id": "settings-096",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "19-administration"
+      ],
+      "category": "empty-error-state",
+      "title": "The promote-a-member empty state is expressed as a disabled control with no path forward",
+      "evidence": "The Add owner/admin row is entirely inert: 'button \"No members to promote\" [disabled] [ref=e130]', 'combobox [disabled] [ref=e135]' and 'button \"Update Role\" [disabled]' (19-administration.aria.txt:81-90). The pane shows exactly one owner marked \"Last owner\" and one agent admin. Nothing explains why there is nobody to promote (everyone present already holds a role), nothing links to Invite Links four sections below, and nothing states how a second owner is added. Cost: an admin cannot distinguish \"no eligible members\" from \"broken\" or \"you lack permission\", and the workspace stays at a bus factor of one with no visible remedy.",
+      "recommendation": "Replace the disabled row with a real empty state: \"Everyone in this workspace already has a role. Invite a member to promote them.\" plus a link that scrolls to Invite Links. Where a second owner is the point, state explicitly how ownership is transferred."
+    },
+    {
+      "id": "settings-097",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "07-settings"
+      ],
+      "category": "affordance",
+      "title": "Documentation leaves the app from inside the nav with no external-link indication",
+      "evidence": "'link \"Documentation\" [ref=e98] [cursor=pointer]' with '/url: https://docs.raft.build' (07-settings.aria.txt:61-64) is the only `link` among twelve nav `button`s, renders with a book icon and no ↗ glyph in the screenshot, and carries no target/rel disclosure in its accessible name. Cost: it sits one tab stop from Administration, a pane that can hold five sections of unsaved changes; a user reaching for in-app help navigates away and loses them.",
+      "recommendation": "Add a visible external-link glyph and \"(opens in a new tab)\" to the accessible name, open it in a new tab, and warn on navigation away from any pane with unsaved changes."
+    },
+    {
+      "id": "settings-098",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "18-billing",
+        "19-administration"
+      ],
+      "category": "consistency",
+      "title": "Numeric inputs use different roles on different panes, and the one that sets the invoice is the weaker",
+      "evidence": "'textbox \"Seats to buy\" [ref=e221]: \"2\"' on Billing (18-billing.aria.txt:149) versus 'spinbutton \"Max Uses\" [ref=e273]' on Administration (19-administration.aria.txt:130). Cost: the field that determines the invoice amount is a plain textbox — no arrow-key increment, no announced min/max, no exposed floor — even though the helper text asserts \"Current usage requires at least 2 seats\". A user typing 1 gets no constraint from the control itself.",
+      "recommendation": "Make Seats to buy a spinbutton with min set to the required floor and an inline error when violated, and keep stepper affordances identical across both panes."
+    },
+    {
+      "id": "settings-099",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "20-applications"
+      ],
+      "category": "accessibility",
+      "title": "Visible field labels do not match their accessible names",
+      "evidence": "'searchbox \"Search connected apps\" [ref=e148]' (20-applications.aria.txt:96) renders the placeholder \"Search apps…\" in the screenshot; 'combobox \"Filter connected apps by category\" [ref=e150]' renders \"All categories\". The visible string is not contained in the accessible name in either case. Cost: voice-control users saying \"click Search apps\" fail to hit the field (WCAG 2.5.3 Label in Name).",
+      "recommendation": "Make the accessible name start with the visible string — e.g. `aria-label=\"Search apps\"` on the searchbox and a visible \"Category\" label above the combobox — so spoken and rendered labels agree."
+    },
+    {
+      "id": "settings-100",
+      "cluster": "settings",
+      "severity": "medium",
+      "screens": [
+        "07-settings",
+        "16-notifications",
+        "22-about"
+      ],
+      "category": "information-architecture",
+      "title": "The Personal / Workspace / About split leaks in both directions",
+      "evidence": "Under Personal, Notifications contains a server-scoped control: \"Mute this server — Stops web push notifications from raft-bobby-test for your account. Other servers are unchanged.\" (16-notifications.aria.txt:88). Under About, the second card is titled \"Workspace\" and repeats \"raft-bobby-test / /raft-bobby-test\" (22-about.aria.txt:137-140) — content already owned by Workspace → Server Profile. Meanwhile Delete Server lives in Server Profile, not Administration, where a user managing the workspace's lifecycle would look. Cost: users cannot use the group headings to predict where a setting lives or how far a change reaches, which is the only job those headings have.",
+      "recommendation": "Re-scope groups by blast radius, not subject: Personal = affects only me (including per-server mute, labelled as a personal preference), Workspace = affects everyone. Move Delete Server into Administration beneath the membership controls, and cut the Workspace card from About."
+    },
+    {
+      "id": "accessibility-101",
+      "cluster": "accessibility",
+      "severity": "low",
+      "screens": [
+        "16-notifications"
+      ],
+      "category": "2.4.6 Headings and Labels (AA)",
+      "title": "'Notifications' names three different things in the same accessibility tree",
+      "evidence": "16-notifications.aria.txt simultaneously contains `button \"Notifications\" [ref=e68]` (settings nav), `heading \"Notifications\" [level=2] [ref=e117]` (the pane), and `region \"Notifications\"` (the toast container present on all 21 screens). A user navigating by landmark or by element list gets three unrelated hits for one word.",
+      "recommendation": "Rename the toast landmark to `aria-label=\"Alerts\"` (or 'Toast messages') to free 'Notifications' for the settings feature."
+    },
+    {
+      "id": "accessibility-102",
+      "cluster": "accessibility",
+      "severity": "low",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "10-thread",
+        "13-dm-cindy",
+        "14-create-channel"
+      ],
+      "category": "1.3.1 Info and Relationships (A); 4.1.3 Status Messages (AA)",
+      "title": "Persistent notification-permission banner is not exposed as a status region",
+      "evidence": "01-chat-channel.aria.txt: `generic [ref=e1185]:` → `img [ref=e1186]`, `generic [ref=e1190]: Your agents keep working after you leave.`, `- text: Turn on notifications so you don't miss when they finish or need you.`, then `button \"Enable notifications\" [ref=e1193]` and `button \"Hide notification reminder for this session\" [ref=e1194]`. The advisory is a plain generic with an unnamed leading `img`, appended after the composer, so a keyboard user reaches it only after tabbing past the whole message input.",
+      "recommendation": "Wrap the banner in `role=\"region\" aria-label=\"Notification setup\"` (or `role=\"status\"` when it first appears), mark the decorative icon `aria-hidden`, and place it before the composer in DOM order."
+    },
+    {
+      "id": "chat-103",
+      "cluster": "chat",
+      "severity": "low",
+      "screens": [
+        "01-chat-channel",
+        "12-channel-files-tab"
+      ],
+      "category": "consistency",
+      "title": "Four different date formats across one channel, none of the visible ones carrying a year",
+      "evidence": "Message headers use `19/07 13:15` (01:116); date dividers use `Sunday 19 July` and `Tuesday 21 July` (01:108, 01:273); hover titles use `19 Jul 2026, 13:15` (01:141); the Files tab uses `19 Jul, 13:15` (12:114). Only the hover title reveals the year, and the content is dated 2026 — so a thread whose replies span years reads as if it happened this week.",
+      "recommendation": "Pick one short format for in-list timestamps and one long format for titles/tooltips, and use them on every surface. Include the year once the item is outside the current year; the Files tab and the message list should not disagree about how to write the same instant."
+    },
+    {
+      "id": "chat-104",
+      "cluster": "chat",
+      "severity": "low",
+      "screens": [
+        "01-chat-channel",
+        "10-thread"
+      ],
+      "category": "feedback-state",
+      "title": "Presence is painted retroactively onto historical messages",
+      "evidence": "All nine of Cindy's messages — dated 19 July and 21 July — carry the same `button \"Offline\"` / `generic \"Offline\"` avatar wrapper reflecting her state right now (01:110, 119, 133, 157, 171, 180, 196, 210, 233; 11 instances in 10-thread). Nothing in the row distinguishes \"was offline when this was sent\" from \"is offline as you read this\".",
+      "recommendation": "Presence is a now-fact; scope it to now. Show it on the member list, the sidebar entry, and at most the latest message, and leave historical rows unadorned."
+    },
+    {
+      "id": "chat-105",
+      "cluster": "chat",
+      "severity": "low",
+      "screens": [
+        "09-channel-back",
+        "01-chat-channel"
+      ],
+      "category": "affordance",
+      "title": "Disabled Send keeps the primary-button fill; the only disabled cue is a 1.64:1 icon",
+      "evidence": "`button \"Send\" [disabled]` (01:308). Sampled from the capture at x 1643–1680, y 814–851: fill rgb(255,216,229) with the paper-plane glyph at rgb(178,178,178) — 1.64:1 icon-on-fill — while the black border and pink fill of the enabled primary are retained. Visual read: \"the contrast between the light pink background fill and the slightly darker pink icon is extremely low and appears well below the 3:1 ratio.\"",
+      "recommendation": "Give disabled Send a neutral fill and a visibly muted border so it stops reading as an armed primary, and keep the glyph legible against whatever fill you choose. If the composer is empty, a hint (\"Type a message\") is better feedback than a silent dead button."
+    },
+    {
+      "id": "chat-106",
+      "cluster": "chat",
+      "severity": "low",
+      "screens": [
+        "01-chat-channel",
+        "14-create-channel"
+      ],
+      "category": "affordance",
+      "title": "Composer has no way to address a specific agent",
+      "evidence": "The composer's complete control set is `button \"Attach media\"`, `button \"Attach file\"`, `checkbox \"As Task\"`, `button \"Send\"` (01:301-308). There is no mention button, emoji picker, formatting control, or slash-command affordance in any snapshot. In 14 the user has hand-typed `@Cindy` into `textbox \"Message #onboarding-owner\" [ref=e1173]` — the syntax is discoverable only by prior knowledge, in a product whose premise is channels containing several agents.",
+      "recommendation": "Add an `@` button that opens the same member picker used in Create Channel, and trigger the picker on typed `@`. Show matched agents with their presence state inline, so choosing an offline agent surfaces the offline fact at the moment of addressing."
+    },
+    {
+      "id": "chat-107",
+      "cluster": "chat",
+      "severity": "low",
+      "screens": [
+        "10-thread"
+      ],
+      "category": "consistency",
+      "title": "Thread composer silently loses the \"As Task\" control",
+      "evidence": "The channel composer exposes `checkbox \"As Task\" [ref=e1196]` (10:318-319, and 01:306). The thread composer, twelve lines later in the same snapshot, exposes only `textbox \"Message thread\"`, `button \"Attach media\"`, `button \"Attach file\"`, `button \"Send\" [disabled]` (10:376-385) — confirmed visually: \"The `As Task` checkbox is **not** present in the thread composer.\"",
+      "recommendation": "Include As Task in the thread composer. Threads are where a request gets scoped down to something actionable; that is the point at which turning it into a task is most useful, and forcing a retype in the channel composer loses the thread linkage."
+    },
+    {
+      "id": "chat-108",
+      "cluster": "chat",
+      "severity": "low",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back",
+        "10-thread",
+        "14-create-channel"
+      ],
+      "category": "density-layout",
+      "title": "Notification nudge can only be dismissed for the session and reserves 65px permanently",
+      "evidence": "The banner appears below the composer on every chat screen with `button \"Enable notifications\"` and `button \"Hide notification reminder for this session\" [ref=e1194]` (01:310-318). Measured at y 879–944 (65px) in a 960px window; the dismiss is explicitly session-scoped, so it returns on every visit until permissions are granted.",
+      "recommendation": "Offer a real \"Don't show again\" alongside the session dismiss, or collapse the nudge to a single-line inline affordance in the composer chrome after the first dismissal. Recurring 65px plus a recurring decision is a poor trade for a prompt the user has already declined."
+    },
+    {
+      "id": "chat-109",
+      "cluster": "chat",
+      "severity": "low",
+      "screens": [
+        "01-chat-channel",
+        "11-channel-tasks-tab",
+        "12-channel-files-tab"
+      ],
+      "category": "accessibility",
+      "title": "Member-count control is announced as \"2\"",
+      "evidence": "`button \"2\" [ref=e220]` containing `img [ref=e221]` and `generic [ref=e226]: \"2\"` (01:87-89, repeated on every chat screen). Its accessible name is the bare digit; the icon carries the meaning and has no text alternative.",
+      "recommendation": "`aria-label=\"Members (2)\"`, and give the icon `aria-hidden=\"true\"`."
+    },
+    {
+      "id": "chat-110",
+      "cluster": "chat",
+      "severity": "low",
+      "screens": [
+        "01-chat-channel",
+        "09-channel-back"
+      ],
+      "category": "accessibility",
+      "title": "Grouped messages expose their timestamp twice to assistive tech",
+      "evidence": "Time-only continuation rows emit both the title string and the short label as sibling text nodes: `generic \"19 Jul 2026, 13:15\" [ref=e558]` followed by `generic [ref=e560]: 13:15` (01:141-142); same pattern at 01:189-190 (`\"19 Jul 2026, 13:42\"` / `13:42`) and 01:207-208 (`\"19 Jul 2026, 13:50\"` / `13:50`). A screen reader reads the instant twice per grouped message.",
+      "recommendation": "Use a `<time datetime>` element with the short form as its text and the long form on `title` only (or move the long form into `aria-label` on the element rather than as an adjacent text node), so exactly one timestamp reaches the accessibility tree."
+    },
+    {
+      "id": "navigation-111",
+      "cluster": "navigation",
+      "severity": "low",
+      "screens": [
+        "02-activity.png"
+      ],
+      "category": "information-architecture",
+      "title": "Channel traffic and DMs are separated only by a single small glyph",
+      "evidence": "Row 1 renders `# onboarding-owner`; row 2 renders `@ Cindy`. The rows are otherwise identical in layout, weight and colour, and the filter set (All / Unread / Mentions) offers no way to split channel from direct messages.",
+      "recommendation": "Differentiate the two sources visually beyond an 8px prefix glyph — a colour-coded source label or grouped sections — and consider adding a DMs facet to the filter group so the inbox can be triaged by source."
+    },
+    {
+      "id": "navigation-112",
+      "cluster": "navigation",
+      "severity": "low",
+      "screens": [
+        "02-activity.png"
+      ],
+      "category": "copy",
+      "title": "The message preview repeats the sender named in the row header",
+      "evidence": "Row 2 header is `@ Cindy`; the preview immediately below opens with `generic [ref=e101]: \"Cindy:\"` before the message text.",
+      "recommendation": "Drop the sender prefix when the row header already identifies the sender (keep it for channel rows, where the header is the channel name and the sender is genuinely new information). The first words of a preview line are the highest-value scan position."
+    },
+    {
+      "id": "navigation-113",
+      "cluster": "navigation",
+      "severity": "low",
+      "screens": [
+        "05-computers.png"
+      ],
+      "category": "accessibility",
+      "title": "The computers row announces 'offline' three times",
+      "evidence": "`button \"Computer offline Bozhidars-MacBook-Air computer offline\"` — the status icon's label (`generic \"Computer offline\" [ref=e61]`) plus the visible status text (`generic [ref=e66]: computer offline`) both feed the composed name.",
+      "recommendation": "Mark the status icon `aria-hidden` since its meaning is already in the visible text, yielding \"Bozhidars-MacBook-Air, computer offline\"."
+    },
+    {
+      "id": "navigation-114",
+      "cluster": "navigation",
+      "severity": "low",
+      "screens": [
+        "06-search.png"
+      ],
+      "category": "copy",
+      "title": "The ⌘K hint is shown only when it is useless",
+      "evidence": "The placeholder reads \"Search channels, DMs, messages…   ⌘K\" on a field that is already focused (`textbox … [active] [ref=e57]`) on the Search destination itself.",
+      "recommendation": "Advertise ⌘K on the rail's Search button tooltip and in other destinations, not inside the field it opens. As placed, the shortcut is displayed only when the user has already done the thing it triggers, and it disappears the moment they start typing — shown when useless, hidden when learnable."
+    },
+    {
+      "id": "settings-115",
+      "cluster": "settings",
+      "severity": "low",
+      "screens": [
+        "22-about",
+        "20-applications",
+        "21-mcp"
+      ],
+      "category": "copy",
+      "title": "Each pane states its own title three times; About states it five",
+      "evidence": "On 22-about the word About appears as the nav group label 'generic [ref=e94]: About', the nav item 'button \"About\" [ref=e95]', the topbar 'heading \"About\" [level=2] [ref=e116]', the section eyebrow, and the card title 'generic [ref=e125]: About' — five times above a two-line card. The same triple-titling recurs for Applications, MCP Servers, Appearance and Administration. Cost: roughly 80px of vertical space per pane spent restating the label the user just clicked.",
+      "recommendation": "Keep the topbar title and drop the eyebrow, or keep the eyebrow and drop the topbar. Where a pane has one section, the section title is redundant with the pane title — remove it and start with content."
+    },
+    {
+      "id": "settings-116",
+      "cluster": "settings",
+      "severity": "low",
+      "screens": [
+        "19-administration",
+        "21-mcp",
+        "20-applications"
+      ],
+      "category": "accessibility",
+      "title": "Section counts are concatenated to their labels in the accessibility tree",
+      "evidence": "'generic [ref=e124]: Owners & Admins2' (19-administration.aria.txt:76), 'generic [ref=e125]: MCP servers0' (21-mcp.aria.txt:76), 'generic [ref=e144]: Recommended2' (line 90). The screenshots show a visual gap, so this is text-node concatenation rather than a rendering bug. Cost: screen readers announce \"Owners and Admins two\" and \"MCP servers zero\".",
+      "recommendation": "Separate the count into its own element with whitespace or an explicit label — e.g. \"Owners & Admins\" + `<span>2 total</span>` — so the announced string parses."
+    },
+    {
+      "id": "settings-117",
+      "cluster": "settings",
+      "severity": "low",
+      "screens": [
+        "21-mcp",
+        "20-applications"
+      ],
+      "category": "consistency",
+      "title": "Two identical Add server buttons in one viewport, and the same action carries different weight than on Applications",
+      "evidence": "'button \"Add server\" [ref=e127]' in the header and 'button \"Add server\" [ref=e138]' in the empty state (21-mcp.aria.txt:77,85) are both visible simultaneously with identical labels and identical outline styling. The recommended-integration 'button \"Add\"' renders as a white/outline fill (sampled #FFFFFF) while the analogous Install on Applications is pink primary (#FE7DA8). Cost: minor redundancy plus a mismatched hierarchy — connecting an arbitrary credentialed HTTP endpoint is presented as a lower-emphasis action than installing a reviewed marketplace app.",
+      "recommendation": "Hide the header button while the empty state is showing, and align button weight to risk: give MCP's Add the same or greater emphasis as the marketplace Install."
+    },
+    {
+      "id": "settings-118",
+      "cluster": "settings",
+      "severity": "low",
+      "screens": [
+        "18-billing"
+      ],
+      "category": "copy",
+      "title": "\"More professional features coming soon\" is listed as a missing feature with a red cross",
+      "evidence": "Under Not included: 'generic [ref=e185]: More professional features coming soon' with a cross icon, alongside three real limits (18-billing.aria.txt:117-119). Cost: on the upsell surface the implied Pro benefit is unspecified future work, which weakens the three concrete differentiators directly above it.",
+      "recommendation": "Remove the row from the comparison list. If a roadmap signal is wanted, put it below the plan card as prose, not as a crossed-out entitlement."
+    },
+    {
+      "id": "settings-119",
+      "cluster": "settings",
+      "severity": "low",
+      "screens": [
+        "20-applications"
+      ],
+      "category": "feedback-state",
+      "title": "Only the Marketplace tab shows a count",
+      "evidence": "'radio \"Marketplace 3\" [checked]' carries a count while 'radio \"Installed\"' and 'radio \"My apps\"' carry none (20-applications.aria.txt:85-93). Cost: an admin cannot tell whether anything is installed on the server without clicking through, on a pane whose stated purpose includes \"see apps installed on this server\" (line 83).",
+      "recommendation": "Show counts on all three tabs, including a zero, so the tab strip answers \"is anything installed?\" without a round trip."
+    }
+  ]
+}
