@@ -17,6 +17,7 @@ Install only the ones you want.
 | Firecrawl Search | `tools/firecrawl_search.ts` | Direct Firecrawl Search API with web/news/images sources, GitHub/research/PDF categories, domain/date/location filters, highlights, optional page scraping, and raw response metadata. omp 17.0.9+ can use Firecrawl behind ordinary `web_search` when Firecrawl is explicitly selected in `providers.webSearchOrder`; this extension is the advanced/direct lane. | Credential order: omp session/provider Firecrawl credential first; `FIRECRAWL_API_KEY` second; keyless access last (limited). Either credential provides higher limits. |
 | Firecrawl Crawl | `tools/firecrawl_crawl.ts` | Site traversal: `map` (discover every URL on a domain), `scrape` (one page → markdown), `crawl` (managed multi-page crawl with polling), plus `status` and `cancel`. The only crawl primitive in the fleet — the search tools all need you to already know the URLs. Reaches **public pages only**: Firecrawl sends no cookies or session, so anything behind a login needs the `xd://browser` device. Bills per scraped page. | Same credential order as Firecrawl Search |
 | Parallel Search | `tools/parallel_search.ts` | Full Parallel V1 API: search modes (`turbo` / `basic` / `advanced`) with objective + multi-query support, URL extract, and deep-research task processors (`lite` … `ultra8x`). omp's native path hardcodes the old beta `fast` mode. | `/login` → Parallel, or `PARALLEL_API_KEY` |
+| Tavily Search | `tools/tavily_search.ts` | Full Tavily AI search with basic/advanced depth, news/finance topic filters, synthesized answers, URL batch extract, sitemap mapping, crawl, and live quota queries. | `/login` → Tavily, or `TAVILY_API_KEY` |
 
 ## Install
 
@@ -77,7 +78,8 @@ Just ask — the model should pick the tool from your wording:
 - "Use exa for search: recent papers on agent memory"
 - "Use Firecrawl news search for this week and return highlights"
 - "Use parallel for search: compare agent memory backends"
-- "Use your normal web search and expand with Exa and Parallel"
+- "Use tavily for search: latest breakthroughs in AI agents"
+- "Use your normal web search and expand with Exa, Parallel, and Tavily"
 
 ### How the agent must invoke them (omp xdev)
 

@@ -6,3 +6,7 @@ node_modules/
 !.env.example
 .idea/
 .vscode/
+WATCHDOG.yml
+*.jsonl
+firecrawl-dump-task-launches.md
+firecrawl-task-launch-calls.json

@@ -21,7 +21,7 @@ RULES_DIR="${HOME}/.omp/agent/rules"
 CONFIG_YML="${HOME}/.omp/agent/config.yml"
 
 # Canonical short-name order. Keep firecrawl = firecrawl_search; firecrawl-crawl is separate.
-ALL_TOOLS=(x exa parallel hackernews feed arxiv reddit github producthunt firecrawl firecrawl-crawl)
+ALL_TOOLS=(x exa parallel tavily hackernews feed arxiv reddit github producthunt firecrawl firecrawl-crawl)
 
 WITH_CONFIRM_RULE=0
 WITH_APPROVAL_GATE=0
@@ -54,6 +54,7 @@ Tools (pick one or more):
   producthunt     producthunt_search.ts  — Product Hunt launches (Developer Token, not API Key)
   firecrawl       firecrawl_search.ts    — advanced direct Firecrawl search (keyless limited; optional FIRECRAWL_API_KEY)
   firecrawl-crawl firecrawl_crawl.ts     — Firecrawl crawl/map (same Firecrawl credential as firecrawl)
+  tavily          tavily_search.ts       — Tavily AI search, extract, map, crawl, and quota (TAVILY_API_KEY)
   all             all of the above (install / update --all)
 
 Extras (opt-in, applied on install/update for the selected tools):
@@ -71,6 +72,7 @@ tool_file() {
     x) echo "x_search.ts" ;;
     exa) echo "exa_search.ts" ;;
     parallel) echo "parallel_search.ts" ;;
+    tavily) echo "tavily_search.ts" ;;
     hackernews) echo "hackernews_search.ts" ;;
     feed) echo "feed_search.ts" ;;
     arxiv) echo "arxiv_search.ts" ;;
@@ -92,6 +94,7 @@ name_for_file() {
     x_search.ts) echo "x" ;;
     exa_search.ts) echo "exa" ;;
     parallel_search.ts) echo "parallel" ;;
+    tavily_search.ts) echo "tavily" ;;
     hackernews_search.ts) echo "hackernews" ;;
     feed_search.ts) echo "feed" ;;
     arxiv_search.ts) echo "arxiv" ;;
@@ -411,6 +414,7 @@ print_epilogue() {
     echo "       Firecrawl:      keyless limited mode; export FIRECRAWL_API_KEY=... for higher limits"
     wants firecrawl-crawl && echo "                       (covers firecrawl + firecrawl-crawl)"
   fi
+  wants tavily && echo "       Tavily:         export TAVILY_API_KEY=... or session key"
   wants hackernews && echo "       Hacker News:    none needed"
   wants feed && echo "       Feeds:          none needed"
   wants arxiv && echo "       arXiv:          none needed"
@@ -424,6 +428,7 @@ print_epilogue() {
   wants x && echo "       \"what's being said on X about ...\""
   wants exa && echo "       \"use exa for search: ...\""
   wants parallel && echo "       \"use parallel for search: ...\""
+  wants tavily && echo "       \"use tavily for search: ...\""
   wants firecrawl && echo "       \"use firecrawl for advanced direct search: ...\""
   wants firecrawl-crawl && echo "       \"use firecrawl-crawl to crawl/map ...\""
   wants hackernews && echo "       \"search hacker news for ...\" / \"what's on the front page of HN?\""
@@ -439,7 +444,7 @@ print_epilogue() {
     echo "One global rule covers web_search and every extended tool (including X)."
   fi
   echo
-  echo "Docs: docs/x.md, docs/exa.md, docs/parallel.md, docs/hackernews.md, docs/feed.md,"
+  echo "Docs: docs/x.md, docs/exa.md, docs/parallel.md, docs/tavily.md, docs/hackernews.md, docs/feed.md,"
   echo "      docs/arxiv.md, docs/reddit.md, docs/github.md, docs/producthunt.md, docs/firecrawl.md"
 }
 
@@ -499,7 +504,7 @@ while [[ "$#" -gt 0 ]]; do
         SELECTED=("${ALL_TOOLS[@]}")
       fi
       ;;
-    x|exa|parallel|hackernews|feed|arxiv|reddit|github|producthunt|firecrawl|firecrawl-crawl)
+    x|exa|parallel|tavily|hackernews|feed|arxiv|reddit|github|producthunt|firecrawl|firecrawl-crawl)
       SELECTED+=("$arg")
       ;;
     *)

@@ -16,6 +16,39 @@ const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 20;
 const FETCH_TIMEOUT_MS = 15000;
 
+const POSTS_QUERY = `
+  query Posts($first: Int, $order: PostsOrder, $topic: String, $postedAfter: DateTime, $after: String) {
+    posts(first: $first, order: $order, topic: $topic, postedAfter: $postedAfter, after: $after) {
+      totalCount
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      edges {
+        node {
+          id
+          name
+          tagline
+          description
+          url
+          website
+          votesCount
+          commentsCount
+          createdAt
+          featuredAt
+          topics {
+            edges {
+              node {
+                name
+                slug
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
 const RECENCY_DAYS = { day: 1, week: 7, month: 30, year: 365 };
 
 const RETRY_MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries

@@ -399,22 +399,22 @@ async function captureSources(sources, provider, signal) {
 }
 
 export default function xSearchToolFactory(api) {
-	const t = api.arktype;
-	const parameters = t({
-		query: "string",
-		"model?": "string",
-		"reasoning_effort?": "'low' | 'medium' | 'high'",
-		"focus?": "'relevance' | 'volume'",
-		"recency?": "'day' | 'week' | 'month' | 'year'",
-		"limit?": "1 <= number <= 30",
-		"allowed_handles?": "string[]",
-		"excluded_handles?": "string[]",
-		"from_date?": "string",
-		"to_date?": "string",
-		"enable_image_understanding?": "boolean",
-		"enable_video_understanding?": "boolean",
-		"capture?": "boolean",
-		"capture_provider?": "'syndication' | 'firecrawl'",
+	const z = api.zod || api.z;
+	const parameters = z.object({
+		query: z.string().describe("Search query for public posts on X (Twitter)."),
+		model: z.string().optional().describe("Model name (default grok-4.3)."),
+		reasoning_effort: z.enum(["low", "medium", "high"]).optional().describe("Reasoning effort (default high)."),
+		focus: z.enum(["relevance", "volume"]).optional().describe("relevance (default) or volume."),
+		recency: z.enum(["day", "week", "month", "year"]).optional().describe("Time filter window."),
+		limit: z.number().int().min(1).max(30).optional().describe("Max posts to return (1-30, default 10)."),
+		allowed_handles: z.array(z.string()).optional().describe("Only include posts from these Twitter handles."),
+		excluded_handles: z.array(z.string()).optional().describe("Exclude posts from these Twitter handles."),
+		from_date: z.string().optional().describe("Start date (YYYY-MM-DD)."),
+		to_date: z.string().optional().describe("End date (YYYY-MM-DD)."),
+		enable_image_understanding: z.boolean().optional().describe("Enable image understanding in posts."),
+		enable_video_understanding: z.boolean().optional().describe("Enable video understanding in posts."),
+		capture: z.boolean().optional().describe("Resolve permalinks to real post text and engagement."),
+		capture_provider: z.enum(["syndication", "firecrawl"]).optional().describe("syndication (free) or firecrawl (credits)."),
 	});
 
 	return {
