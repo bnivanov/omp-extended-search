@@ -10,7 +10,7 @@
 #   ./install.sh uninstall arxiv            remove a previously installed tool
 #
 # Opt-in extras (applied on install/update for the selected tools):
-#   --with-confirm-rule    also install the recommend-first agent rule(s) into ~/.omp/agent/rules
+#   --with-confirm-rule    also install the deep-research skill (plan lives in the skill, not a rule)
 #   --with-approval-gate   also set tools.approval.<tool>: allow in ~/.omp/agent/config.yml
 #   --with-gate            both of the above
 set -euo pipefail
@@ -18,6 +18,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST_DIR="${HOME}/.omp/agent/tools"
 RULES_DIR="${HOME}/.omp/agent/rules"
+SKILLS_DIR="${HOME}/.omp/agent/skills"
 CONFIG_YML="${HOME}/.omp/agent/config.yml"
 
 # Canonical short-name order. Keep firecrawl = firecrawl_search; firecrawl-crawl is separate.
@@ -58,7 +59,7 @@ Tools (pick one or more):
   all             all of the above (install / update --all)
 
 Extras (opt-in, applied on install/update for the selected tools):
-  --with-confirm-rule    install the global plan-first agent rule (all search tools)
+  --with-confirm-rule    install the deep-research skill (visible plan in chat; not an alwaysApply rule)
   --with-approval-gate   set tools.approval.<tool>: allow in config.yml
   --with-gate            both extras
 
@@ -320,15 +321,22 @@ cmd_update() {
 }
 
 apply_confirm_rule() {
-  mkdir -p "$RULES_DIR"
-  # One global plan-first gate: web_search + every extended tool (including X).
-  cp "$ROOT/rules/omp-search-confirm.md" "$RULES_DIR/omp-search-confirm.md"
-  echo "Installed rule -> ${RULES_DIR}/omp-search-confirm.md"
-  # Drop legacy X-only rule if a previous install left it behind.
-  if [[ -f "$RULES_DIR/x-search-confirm.md" ]]; then
-    rm -f "$RULES_DIR/x-search-confirm.md"
-    echo "Removed legacy rule -> ${RULES_DIR}/x-search-confirm.md (folded into omp-search-confirm)"
+  # Plan-first gate lives in the skill, not an alwaysApply rule.
+  local SKILL_SRC="$ROOT/.agents/skills/deep-research"
+  local SKILL_DST="$SKILLS_DIR/deep-research"
+  if [[ -d "$SKILL_SRC" ]]; then
+    mkdir -p "$SKILLS_DIR"
+    rm -rf "$SKILL_DST"
+    cp -R "$SKILL_SRC" "$SKILL_DST"
+    echo "Installed skill -> ${SKILL_DST}"
   fi
+  mkdir -p "$RULES_DIR"
+  for stale in omp-search-confirm.md x-search-confirm.md; do
+    if [[ -f "$RULES_DIR/$stale" ]]; then
+      rm -f "$RULES_DIR/$stale"
+      echo "Removed stale rule -> ${RULES_DIR}/${stale} (gate is in the deep-research skill)"
+    fi
+  done
 }
 
 apply_approval_gate() {
@@ -439,12 +447,13 @@ print_epilogue() {
   wants producthunt && echo "       \"what launched on product hunt this week?\""
   if [[ "$WITH_CONFIRM_RULE" -eq 0 && "$WITH_APPROVAL_GATE" -eq 0 ]]; then
     echo
-    echo "Optional: re-run with --with-gate (or --with-confirm-rule) so the agent"
-    echo "proposes which sources + settings to use and waits for your OK in chat."
-    echo "One global rule covers web_search and every extended tool (including X)."
+    echo "Optional: re-run with --with-gate (or --with-confirm-rule) to install"
+    echo "the deep-research skill. The model writes a visible capability plan"
+    echo "(chosen vs rejected + cost estimate + how-to-proceed options) in chat"
+    echo "and waits. Not an alwaysApply rule; do not use the ask tool."
   fi
   echo
-  echo "Docs: docs/x.md, docs/exa.md, docs/parallel.md, docs/tavily.md, docs/hackernews.md, docs/feed.md,"
+  echo "Docs: docs/capability-catalog.md, docs/x.md, docs/exa.md, docs/parallel.md, docs/tavily.md, docs/hackernews.md, docs/feed.md,"
   echo "      docs/arxiv.md, docs/reddit.md, docs/github.md, docs/producthunt.md, docs/firecrawl.md"
 }
 

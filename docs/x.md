@@ -77,7 +77,7 @@ Per call, the driver model may pass `model` or `reasoning_effort` directly.
 
 ## Confirm settings before each search (optional)
 
-`focus`, `reasoning_effort`, `limit`, the window, and `capture` all change cost, latency, and what comes back. The **global** plan-first rule covers X along with every other research tool:
+`focus`, `reasoning_effort`, `limit`, the window, and `capture` all change cost, latency, and what comes back. The **deep-research skill** covers X along with every other research tool — visible plan in chat, numbered options, then wait. Not an alwaysApply rule; do not use the `ask` tool.
 
 ```bash
 ./install.sh x --with-confirm-rule
@@ -85,7 +85,7 @@ Per call, the driver model may pass `model` or `reasoning_effort` directly.
 ./install.sh all --with-confirm-rule
 ```
 
-That installs [rules/omp-search-confirm.md](../rules/omp-search-confirm.md) only — one always-on gate for `web_search` and all extended tools, with X heuristics included. **Chat** gate (propose → you say go), not a per-call UI popup. Keep `approvalMode: yolo` (or `tools.approval.x_search: allow`) so the tool runs quietly after you approve the plan. Only use `prompt` if you want a hard dialog every call.
+That installs [`.agents/skills/deep-research/SKILL.md`](../.agents/skills/deep-research/SKILL.md) and removes any leftover `omp-search-confirm` rule. **Chat** gate (plan → you reply with a number), not a per-call UI popup. Keep `approvalMode: yolo` (or `tools.approval.x_search: allow`) so the tool runs quietly after you pick. Only use `prompt` if you want a hard dialog every call.
 
 ## What it can't do
 

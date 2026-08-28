@@ -19,6 +19,8 @@ Install only the ones you want.
 | Parallel Search | `tools/parallel_search.ts` | Full Parallel V1 API: search modes (`turbo` / `basic` / `advanced`) with objective + multi-query support, URL extract, and deep-research task processors (`lite` … `ultra8x`). omp's native path hardcodes the old beta `fast` mode. | `/login` → Parallel, or `PARALLEL_API_KEY` |
 | Tavily Search | `tools/tavily_search.ts` | Full Tavily AI search with basic/advanced depth, news/finance topic filters, synthesized answers, URL batch extract, sitemap mapping, crawl, and live quota queries. | `/login` → Tavily, or `TAVILY_API_KEY` |
 
+Research routing lives in the **deep-research skill** ([.agents/skills/deep-research/SKILL.md](.agents/skills/deep-research/SKILL.md)) plus [docs/capability-catalog.md](docs/capability-catalog.md). The model constructs a plan from the capability table (chosen vs rejected, cost **estimate**, numbered how-to-proceed options), writes it as a **visible chat message**, and waits. Thinking does not count. Do not use the `ask` tool. Not an alwaysApply rule.
+
 ## Install
 
 ```bash
@@ -134,9 +136,9 @@ raw Firecrawl metadata.
 2. **Restart omp** — it picks up new tool files and mounts them under `xd://<name>`.
    Sanity check: `read xd://hackernews_search` (or another installed tool) returns a schema.
 3. **Built-in `web_search` stays the default** for everyday lookups. omp 17.0.9+ can back it with Firecrawl when explicitly configured in `providers.webSearchOrder`; this installer leaves that order unchanged. These tools add lanes or controls omp covers poorly or not at all (X, HN, Reddit, PH, arXiv, feeds, advanced/direct Firecrawl, full Exa/Parallel, GitHub discovery). You can mix them: “use normal web search and also check HN + Reddit.”
-4. **Optional plan-first gate** — with the global confirm rule installed, the agent does **not** fire searches immediately. It proposes which sources to use, how to structure each request, and waits for your OK — one rule over web_search and every extended tool (including X). After approval, it invokes via `write` to `xd://…` as above.
+4. **Optional plan-first skill** — with the deep-research skill installed, the agent does **not** fire searches immediately. It writes a **visible** capability plan (Chosen vs Rejected vs cost estimate vs numbered how-to-proceed options) in the chat message and waits. Thinking does not count. Do not use the `ask` tool. After you reply with a number or a tweak, it invokes via `write` to `xd://…` as above.
 
-## Optional: confirm-before-search gate
+## Optional: deep-research skill (plan in chat)
 
 Settings change cost, latency, and which corner of the internet you hit. If you'd rather shape the research in chat first:
 
@@ -146,9 +148,11 @@ Settings change cost, latency, and which corner of the internet you hit. If you'
 ./install.sh all --with-gate
 ```
 
-That installs one global recommend-first **agent rule** ([rules/omp-search-confirm.md](rules/omp-search-confirm.md)) covering built-in `web_search` and every extended tool (HN, Reddit, PH, GitHub, arXiv, feeds, X, Firecrawl, Exa, Parallel).
+That copies [`.agents/skills/deep-research/`](.agents/skills/deep-research/) to `~/.omp/agent/skills/deep-research/` and **removes** any leftover alwaysApply confirm rule (`omp-search-confirm.md`). The gate is §0 of the skill.
 
-**Intended UX:** the model proposes sources + parameters in the chat and waits for your “go” / tweaks. It is **not** a per-call “Approve x_search?” popup. Keep `tools.approvalMode: yolo` (omp default for many setups) or per-tool `allow` so tools run quietly after you approve the plan in chat. Only set a tool to `prompt` if you *want* a hard UI dialog every call. Say “just search” anytime to skip the chat gate for one request.
+The catalog the model plans from is [docs/capability-catalog.md](docs/capability-catalog.md) (also `skill://deep-research/references/capability-catalog.md`). It is a capability table, **not** a first-use-this ladder. Every plan must name why it picked the mix **and** why it rejected the near-misses, plus a cost/limit **estimate** (guidance, not a quote — there is no per-call spend guard), then numbered options so you can QA the approach.
+
+**Intended UX:** visible plan in chat (including options) → STOP → you reply `1` / `2` / a tweak → tools run. Keep `tools.approvalMode: yolo` (or per-tool `allow`) so tools run quietly after you pick. Only set a tool to `prompt` if you *want* a hard UI dialog every call. Say “just search” anytime to skip the chat gate for one request. “Research X” is **not** a skip.
 
 ## Known limitations
 
@@ -201,14 +205,16 @@ re-checked adversarially. Claims here are about what the code does, not what the
 - [docs/x.md](docs/x.md) — x_search settings: focus, reasoning effort, date windows, handle filters, post capture
 - [docs/exa.md](docs/exa.md) — exa_search settings: types, contents packing, categories, filters, answer, contents
 - [docs/firecrawl.md](docs/firecrawl.md) — `firecrawl_search` SERP + papers/developer indexes; `firecrawl_crawl` map/scrape/crawl/batch/extract/agent/interact, page limits, and per-page cost
+- [docs/capability-catalog.md](docs/capability-catalog.md) — planning table: every native + extended + keyless capability, costs as **guidance**, chosen vs rejected
 - [docs/capability-matrix.md](docs/capability-matrix.md) — source-verified audit of what every tool can and cannot do (a snapshot; re-run the audit rather than hand-editing it)
 - [docs/parallel.md](docs/parallel.md) — parallel_search settings: modes, extract, task processors
+- [docs/tavily.md](docs/tavily.md) — tavily_search settings: search/extract/map/crawl/quota
 
-### Agent rule (plan-first gate)
+### Deep-research skill (plan-first gate)
 
-- [rules/omp-search-confirm.md](rules/omp-search-confirm.md) — **global** rule (`alwaysApply`): propose source mix + settings across `web_search` and every extended tool, wait for chat OK. Not X-only.
+- [`.agents/skills/deep-research/SKILL.md`](.agents/skills/deep-research/SKILL.md) — visible capability plan in the chat message (Chosen / Rejected / cost estimate / numbered how-to-proceed options) → STOP → wait for a reply. Do not use the `ask` tool. Copied to `~/.omp/agent/skills/deep-research/` with `--with-confirm-rule`.
 
-Install into omp with `./install.sh … --with-confirm-rule` (copies it to `~/.omp/agent/rules/`), or copy the file there yourself.
+Install into omp with `./install.sh … --with-confirm-rule` (copies the skill and removes any leftover alwaysApply confirm rule).
 
 ## Notes
 
