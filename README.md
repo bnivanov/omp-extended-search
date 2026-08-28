@@ -14,8 +14,8 @@ Install only the ones you want.
 | Product Hunt | `tools/producthunt_search.ts` | Recent/top launches by topic and date (the v2 API has no keyword search — it lists, it doesn't grep). | `PRODUCTHUNT_API_TOKEN` (Developer Token from the free app page — not the API Key) |
 | X Search | `tools/x_search.ts` | Searches public posts on X (Twitter) via xAI's native search. Keyword, semantic, user, and thread search; can optionally resolve each cited post to its real text and engagement numbers. | `/login` → xAI Grok (SuperGrok or X Premium+), or `XAI_API_KEY` |
 | Exa Search | `tools/exa_search.ts` | Full Exa API: search types (`auto` / `fast` / `neural` / `deep`), vertical categories (papers, people, companies, github), domain/date filters, answer-with-citations, URL contents fetch. omp's native Exa path only ever uses `auto` + summary. | `/login` → Exa, or `EXA_API_KEY` |
-| Firecrawl Search | `tools/firecrawl_search.ts` | Direct Firecrawl Search API with web/news/images sources, GitHub/research/PDF categories, domain/date/location filters, highlights, optional page scraping, and raw response metadata. omp 17.0.9+ can use Firecrawl behind ordinary `web_search` when Firecrawl is explicitly selected in `providers.webSearchOrder`; this extension is the advanced/direct lane. | Credential order: omp session/provider Firecrawl credential first; `FIRECRAWL_API_KEY` second; keyless access last (limited). Either credential provides higher limits. |
-| Firecrawl Crawl | `tools/firecrawl_crawl.ts` | Site traversal: `map` (discover every URL on a domain), `scrape` (one page → markdown), `crawl` (managed multi-page crawl with polling), plus `status` and `cancel`. The only crawl primitive in the fleet — the search tools all need you to already know the URLs. Reaches **public pages only**: Firecrawl sends no cookies or session, so anything behind a login needs the `xd://browser` device. Bills per scraped page. | Same credential order as Firecrawl Search |
+| Firecrawl Search | `tools/firecrawl_search.ts` | Direct Firecrawl Search v2 plus Research/Developer indexes: web/news/images sources, GitHub/research/PDF categories, papers/paper/related/developer operations, domain/date/location filters, highlights, optional page scraping. omp 17.0.9+ can use Firecrawl behind ordinary `web_search` when Firecrawl is explicitly selected in `providers.webSearchOrder`; this extension is the advanced/direct lane. | Credential order: omp session/provider Firecrawl credential first; `FIRECRAWL_API_KEY` second; keyless access last (limited). Either credential provides higher limits. |
+| Firecrawl Crawl | `tools/firecrawl_crawl.ts` | Site traversal and extraction: `map`, `scrape` (incl. JSON mode), `crawl`, `batch`, `extract`, `agent`, `interact`, plus status/cancel. The only crawl/extract primitive in the fleet. Reaches **public pages only**: Firecrawl sends no cookies or session, so anything behind a login needs the `xd://browser` device. Bills per scraped page; agent bills dynamically (`max_credits`). | Same credential order as Firecrawl Search |
 | Parallel Search | `tools/parallel_search.ts` | Full Parallel V1 API: search modes (`turbo` / `basic` / `advanced`) with objective + multi-query support, URL extract, and deep-research task processors (`lite` … `ultra8x`). omp's native path hardcodes the old beta `fast` mode. | `/login` → Parallel, or `PARALLEL_API_KEY` |
 | Tavily Search | `tools/tavily_search.ts` | Full Tavily AI search with basic/advanced depth, news/finance topic filters, synthesized answers, URL batch extract, sitemap mapping, crawl, and live quota queries. | `/login` → Tavily, or `TAVILY_API_KEY` |
 
@@ -172,7 +172,7 @@ re-checked adversarially. Claims here are about what the code does, not what the
 - **Product Hunt was dead without an env var.** It now resolves an omp session credential first,
   matching the other tools.
 - **`gh auth token` could hang forever.** Bounded, with the caller's signal threaded through.
-- **No crawl primitive.** `firecrawl_crawl` adds `map` / `scrape` / `crawl`.
+- **No crawl primitive.** `firecrawl_crawl` adds `map` / `scrape` / `crawl` / `batch` / `extract` / `agent` / `interact`.
 - **No way to refresh installed tools.** `install.sh update` / `list` / `uninstall` (see Install).
 
 ### Open
@@ -200,7 +200,7 @@ re-checked adversarially. Claims here are about what the code does, not what the
 - [docs/producthunt.md](docs/producthunt.md) — token setup and parameters
 - [docs/x.md](docs/x.md) — x_search settings: focus, reasoning effort, date windows, handle filters, post capture
 - [docs/exa.md](docs/exa.md) — exa_search settings: types, contents packing, categories, filters, answer, contents
-- [docs/firecrawl.md](docs/firecrawl.md) — `firecrawl_search` sources, categories, filters, highlights, optional scraping, costs, and raw response shape; plus `firecrawl_crawl` (`map` / `scrape` / `crawl` / `status` / `cancel`), page limits, and per-page cost
+- [docs/firecrawl.md](docs/firecrawl.md) — `firecrawl_search` SERP + papers/developer indexes; `firecrawl_crawl` map/scrape/crawl/batch/extract/agent/interact, page limits, and per-page cost
 - [docs/capability-matrix.md](docs/capability-matrix.md) — source-verified audit of what every tool can and cannot do (a snapshot; re-run the audit rather than hand-editing it)
 - [docs/parallel.md](docs/parallel.md) — parallel_search settings: modes, extract, task processors
 

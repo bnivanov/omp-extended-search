@@ -1,12 +1,11 @@
 /**
  * Runtime custom tool: firecrawl_crawl
  *
- * Firecrawl site-traversal endpoints that firecrawl_search does not wire:
- * map (link discovery), scrape (single page), crawl (managed multi-page job
- * with wait/poll), status, and cancel.
+ * Firecrawl site-traversal and extraction endpoints that firecrawl_search does not wire:
+ * map, scrape, crawl, batch scrape, extract, agent, interact, plus status/cancel.
  *
  * Firecrawl sends no cookies or session — PUBLIC pages only. Behind-login
- * traversal needs the xd://browser device.
+ * traversal needs the xd://browser device, or scrape-then-interact on a public page.
  *
  * Auth is optional: OMP's native Firecrawl provider credentials or
  * FIRECRAWL_API_KEY enable authenticated usage, while limited keyless mode remains available.
@@ -24,6 +23,12 @@ const CANCEL_TIMEOUT_MS = 5000;
 const MAX_SNIPPET = 1600;
 const MAX_RENDERED_CONTENT = 5000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const BATCH_TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const EXTRACT_TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const AGENT_TERMINAL = new Set(["completed", "failed"]);
+const DEFAULT_AGENT_MAX_CREDITS = 100;
+const HARD_MAX_AGENT_CREDITS = 2500;
+const HARD_MAX_BATCH_URLS = 100;
 
 function asString(value) {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -45,10 +50,11 @@ function compactText(value, max = MAX_SNIPPET) {
 	return compact.length > max ? `${compact.slice(0, max)}…` : compact;
 }
 
-function asStringArray(value) {
+function asStringArray(value, max) {
 	if (!Array.isArray(value)) return undefined;
 	const items = value.map((item) => asString(item)).filter(Boolean);
-	return items.length ? items : undefined;
+	if (!items.length) return undefined;
+	return max != null ? items.slice(0, max) : items;
 }
 
 function asBoolean(value, fallback) {
@@ -157,6 +163,17 @@ function normalizeFormats(formats) {
 	return list;
 }
 
+function buildScrapeFormats(params) {
+	const names = normalizeFormats(params.formats);
+	return names.map((name) => {
+		if (name !== "json") return name;
+		const fmt = { type: "json" };
+		if (asString(params.json_prompt)) fmt.prompt = params.json_prompt.trim();
+		if (params.json_schema && typeof params.json_schema === "object") fmt.schema = params.json_schema;
+		return fmt;
+	});
+}
+
 function buildMapBody(params) {
 	const body = { url: params.url };
 	if (asString(params.search)) body.search = params.search.trim();
@@ -167,7 +184,7 @@ function buildMapBody(params) {
 }
 
 function buildScrapeBody(params) {
-	const formats = normalizeFormats(params.formats);
+	const formats = buildScrapeFormats(params);
 	const body = {
 		url: params.url,
 		formats,
@@ -175,10 +192,13 @@ function buildScrapeBody(params) {
 	};
 	if (params.max_age_ms != null) body.maxAge = params.max_age_ms;
 	if (params.timeout_ms != null) body.timeout = params.timeout_ms;
+	if (params.wait_for != null) body.waitFor = params.wait_for;
+	if (params.mobile != null) body.mobile = Boolean(params.mobile);
 	const includeTags = asStringArray(params.include_tags);
 	const excludeTags = asStringArray(params.exclude_tags);
 	if (includeTags) body.includeTags = includeTags;
 	if (excludeTags) body.excludeTags = excludeTags;
+	if (Array.isArray(params.actions) && params.actions.length) body.actions = params.actions;
 	const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
 	return { body, formats, timeoutMs };
 }
@@ -206,6 +226,65 @@ function buildCrawlBody(params) {
 	const pollTimeoutMs = clampInt(params.poll_timeout_ms, 1000, 3_600_000, DEFAULT_POLL_TIMEOUT_MS);
 	return { body, limit, formats, wait, pollTimeoutMs };
 }
+
+function buildBatchBody(params) {
+	const urls = asStringArray(params.urls, HARD_MAX_BATCH_URLS) || [];
+	const formats = buildScrapeFormats(params);
+	const body = {
+		urls,
+		formats,
+		onlyMainContent: asBoolean(params.only_main_content, true),
+	};
+	if (params.max_age_ms != null) body.maxAge = params.max_age_ms;
+	if (params.timeout_ms != null) body.timeout = params.timeout_ms;
+	if (params.wait_for != null) body.waitFor = params.wait_for;
+	if (params.mobile != null) body.mobile = Boolean(params.mobile);
+	if (params.max_concurrency != null) body.maxConcurrency = params.max_concurrency;
+	if (params.ignore_invalid_urls != null) body.ignoreInvalidURLs = params.ignore_invalid_urls;
+	const wait = asBoolean(params.wait, true);
+	const pollTimeoutMs = clampInt(params.poll_timeout_ms, 1000, 3_600_000, DEFAULT_POLL_TIMEOUT_MS);
+	return { body, urls, formats, wait, pollTimeoutMs };
+}
+
+function buildExtractBody(params) {
+	const urls = asStringArray(params.urls, HARD_MAX_BATCH_URLS) || [];
+	const body = { urls };
+	if (asString(params.prompt)) body.prompt = params.prompt.trim();
+	if (params.schema && typeof params.schema === "object") body.schema = params.schema;
+	if (params.enable_web_search != null) body.enableWebSearch = Boolean(params.enable_web_search);
+	if (params.include_subdomains != null) body.includeSubdomains = Boolean(params.include_subdomains);
+	if (params.show_sources != null) body.showSources = Boolean(params.show_sources);
+	if (params.ignore_invalid_urls != null) body.ignoreInvalidURLs = params.ignore_invalid_urls;
+	const wait = asBoolean(params.wait, true);
+	const pollTimeoutMs = clampInt(params.poll_timeout_ms, 1000, 3_600_000, DEFAULT_POLL_TIMEOUT_MS);
+	return { body, urls, wait, pollTimeoutMs };
+}
+
+function buildAgentBody(params) {
+	const maxCredits = clampInt(params.max_credits, 1, HARD_MAX_AGENT_CREDITS, DEFAULT_AGENT_MAX_CREDITS);
+	const body = {
+		prompt: params.prompt,
+		maxCredits,
+	};
+	const urls = asStringArray(params.urls, HARD_MAX_BATCH_URLS);
+	if (urls) body.urls = urls;
+	if (params.schema && typeof params.schema === "object") body.schema = params.schema;
+	if (params.strict_constrain_to_urls != null) body.strictConstrainToURLs = Boolean(params.strict_constrain_to_urls);
+	if (asString(params.effort)) body.effort = params.effort.trim();
+	const wait = asBoolean(params.wait, true);
+	const pollTimeoutMs = clampInt(params.poll_timeout_ms, 1000, 3_600_000, DEFAULT_POLL_TIMEOUT_MS);
+	return { body, maxCredits, wait, pollTimeoutMs };
+}
+
+function buildInteractBody(params) {
+	const body = {};
+	if (asString(params.prompt)) body.prompt = params.prompt.trim();
+	if (asString(params.code)) body.code = params.code;
+	if (asString(params.language)) body.language = params.language.trim();
+	if (params.interact_timeout != null) body.timeout = params.interact_timeout;
+	return body;
+}
+
 
 /**
  * Generic Firecrawl HTTP helper with abort/timeout plumbing and retries.
@@ -347,14 +426,13 @@ async function fetchFirecrawl(url, apiKey, method, body, signals, apiTimeoutMs, 
 }
 
 /** Best-effort DELETE cancel with its own 5s timeout; never throws into the caller path. */
-async function cancelCrawlJob(base, apiKey, jobId) {
+async function cancelJob(url, apiKey, jobId) {
 	const cancellation = { attempted: true, jobId, ok: false };
-	if (!asString(jobId)) {
+	if (!asString(jobId) || !asString(url)) {
 		cancellation.attempted = false;
 		cancellation.error = "missing job id";
 		return cancellation;
 	}
-	const url = `${base}/v2/crawl/${encodeURIComponent(jobId)}`;
 	const controller = new AbortController();
 	const timer = setTimeout(() => {
 		const error = new Error(`Firecrawl cancel timed out after ${CANCEL_TIMEOUT_MS}ms`);
@@ -442,16 +520,22 @@ function formatScrapeResults(response) {
 	if (creditsUsed != null) lines.push(`Credits used: ${displayValue(creditsUsed)}`);
 	const url = pageUrl(data) || asString(data?.metadata?.sourceURL);
 	const title = pageTitle(data);
+	const scrapeId = asString(data?.metadata?.scrapeId) || asString(data?.metadata?.scrape_id);
 	if (title) lines.push(`Title: ${title}`);
 	if (url) lines.push(`URL: ${url}`);
+	if (scrapeId) {
+		lines.push(`Scrape ID: ${scrapeId}`);
+		lines.push(`Interact with { operation: "interact", scrape_id: "${scrapeId}", prompt: "…" }.`);
+	}
 	const statusCode = data?.metadata?.statusCode;
 	if (statusCode != null) lines.push(`Status code: ${displayValue(statusCode)}`);
 
+	if (data?.json != null) lines.push(...renderMarkdownBlock(displayValue(data.json), "json"));
 	if (asString(data?.markdown)) lines.push(...renderMarkdownBlock(data.markdown, "markdown"));
 	else if (asString(data?.summary)) lines.push(...renderMarkdownBlock(data.summary, "summary"));
 	else if (asString(data?.html)) lines.push(...renderMarkdownBlock(data.html, "html"));
 	else if (asString(data?.rawHtml)) lines.push(...renderMarkdownBlock(data.rawHtml, "rawHtml"));
-	else lines.push("", "No textual content formats returned; see details.rawResponse.");
+	else if (data?.json == null) lines.push("", "No textual content formats returned; see details.rawResponse.");
 
 	if (Array.isArray(data?.links) && data.links.length) {
 		lines.push("", `Links (${data.links.length}):`);
@@ -529,12 +613,68 @@ function formatStatusResults(response, pages, jobId, pagination) {
 	});
 }
 
-function formatCancelResults(response, jobId) {
-	const lines = ["# Firecrawl crawl cancel", `Job ID: ${jobId}`];
+function formatCancelResults(response, jobId, label = "crawl cancel") {
+	const lines = [`# Firecrawl ${label}`, `Job ID: ${jobId}`];
 	const status = asString(response?.status) || "cancelled";
 	lines.push(`Status: ${status}`);
+	if (response?.success != null) lines.push(`Success: ${displayValue(response.success)}`);
 	return lines.join("\n").trimEnd();
 }
+
+function formatJsonBlock(value, label) {
+	if (value == null) return [];
+	const text = typeof value === "string" ? value : displayValue(value);
+	return renderMarkdownBlock(text, label);
+}
+
+function formatExtractResults(response, jobId) {
+	const lines = ["# Firecrawl extract"];
+	if (jobId) lines.push(`Job ID: ${jobId}`);
+	const status = asString(response?.status) || "unknown";
+	lines.push(`Status: ${status}`);
+	if (response?.tokensUsed != null) lines.push(`Tokens used: ${displayValue(response.tokensUsed)}`);
+	if (response?.creditsUsed != null) lines.push(`Credits used: ${displayValue(response.creditsUsed)}`);
+	if (asString(response?.error)) lines.push(`Error: ${response.error}`);
+	if (response?.data != null) lines.push(...formatJsonBlock(response.data, "data"));
+	if (response?.sources != null) lines.push(...formatJsonBlock(response.sources, "sources"));
+	return lines.join("\n").trimEnd();
+}
+
+function formatAgentResults(response, jobId) {
+	const lines = ["# Firecrawl agent"];
+	if (jobId) lines.push(`Job ID: ${jobId}`);
+	const status = asString(response?.status) || "unknown";
+	lines.push(`Status: ${status}`);
+	if (asString(response?.model)) lines.push(`Model: ${response.model}`);
+	if (asString(response?.effort)) lines.push(`Effort: ${response.effort}`);
+	if (response?.creditsUsed != null) lines.push(`Credits used: ${displayValue(response.creditsUsed)}`);
+	if (asString(response?.error)) lines.push(`Error: ${response.error}`);
+	if (response?.data != null) lines.push(...formatJsonBlock(response.data, "data"));
+	return lines.join("\n").trimEnd();
+}
+
+function formatInteractResults(response, scrapeId) {
+	const lines = ["# Firecrawl interact", `Scrape ID: ${scrapeId}`];
+	if (response?.success != null) lines.push(`Success: ${displayValue(response.success)}`);
+	if (response?.exitCode != null) lines.push(`Exit code: ${displayValue(response.exitCode)}`);
+	if (response?.killed) lines.push("Killed: true (timeout)");
+	if (asString(response?.output)) lines.push(...renderMarkdownBlock(response.output, "output"));
+	if (asString(response?.result)) lines.push(...renderMarkdownBlock(response.result, "result"));
+	if (asString(response?.stdout)) lines.push(...renderMarkdownBlock(response.stdout, "stdout"));
+	if (asString(response?.stderr)) lines.push(...renderMarkdownBlock(response.stderr, "stderr"));
+	if (asString(response?.error)) lines.push(`Error: ${response.error}`);
+	if (asString(response?.liveViewUrl)) lines.push(`Live view: ${response.liveViewUrl}`);
+	return lines.join("\n").trimEnd();
+}
+
+function formatBatchResults(statusPayload, pages, jobId, pagination) {
+	return formatCrawlResults(statusPayload, pages, jobId, {
+		pagination,
+		creditsUsed: statusPayload?.creditsUsed,
+		note: "Batch scrape",
+	}).replace("# Firecrawl crawl", "# Firecrawl batch scrape");
+}
+
 
 function collectCredits(response) {
 	return response?.creditsUsed ?? response?.data?.creditsUsed;
@@ -694,6 +834,74 @@ async function waitForCrawl(base, apiKey, jobId, signals, pollTimeoutMs, onUpdat
 	}
 }
 
+async function waitForStatus(statusUrl, apiKey, jobId, signals, pollTimeoutMs, onUpdate, terminal, label) {
+	const started = Date.now();
+	const terminalSet = terminal || EXTRACT_TERMINAL;
+	const name = label || "job";
+	const externalSignals = [...new Set((signals || []).filter(Boolean))];
+	const pollCtrl = new AbortController();
+	const onExternalAbort = () => {
+		for (const s of externalSignals) {
+			if (s?.aborted) {
+				pollCtrl.abort(asAbortError(s.reason, `Firecrawl ${name} aborted`));
+				return;
+			}
+		}
+	};
+	const externalListeners = [];
+	for (const s of externalSignals) {
+		if (s.aborted) {
+			onExternalAbort();
+		} else {
+			const handler = () => onExternalAbort();
+			s.addEventListener("abort", handler, { once: true });
+			externalListeners.push([s, handler]);
+		}
+	}
+	try {
+		while (true) {
+			if (pollCtrl.signal.aborted) throw asAbortError(pollCtrl.signal.reason, `Firecrawl ${name} aborted`);
+			for (const s of externalSignals) {
+				if (s?.aborted) throw asAbortError(s.reason, `Firecrawl ${name} aborted`);
+			}
+			const elapsed = Date.now() - started;
+			if (elapsed >= pollTimeoutMs) {
+				const error = new Error(`Firecrawl ${name} poll timed out after ${pollTimeoutMs}ms (job ${jobId})`);
+				error.name = "TimeoutError";
+				throw error;
+			}
+			const remaining = Math.max(1000, pollTimeoutMs - elapsed);
+			const requestTimeout = Math.min(DEFAULT_TIMEOUT_MS, remaining);
+			const lastPayload = await fetchFirecrawl(statusUrl, apiKey, "GET", undefined, signals, requestTimeout, onUpdate);
+			const status = asString(lastPayload?.status) || "unknown";
+			onUpdate?.({
+				content: [{ type: "text", text: `Firecrawl ${name} ${status} (job ${jobId})` }],
+				details: {
+					phase: "poll",
+					jobId,
+					status,
+					creditsUsed: lastPayload?.creditsUsed,
+					tokensUsed: lastPayload?.tokensUsed,
+				},
+			});
+			if (terminalSet.has(status)) {
+				if (status === "failed" || status === "cancelled") {
+					const detail = apiErrorDetail(lastPayload, `${name} ${status}`);
+					throw new Error(`Firecrawl ${name} ${status} (job ${jobId}): ${detail.message}`);
+				}
+				return lastPayload;
+			}
+			const sleepMs = Math.min(DEFAULT_POLL_INTERVAL_MS, Math.max(200, pollTimeoutMs - (Date.now() - started)));
+			await sleepWithAbort(sleepMs, pollCtrl.signal);
+		}
+	} finally {
+		for (const [s, handler] of externalListeners) {
+			s.removeEventListener("abort", handler);
+		}
+	}
+}
+
+
 const factory = (host: CustomToolFactoryHost) => {
 	const z = host.zod;
 	const scrapeOptionsSchema = z
@@ -713,8 +921,25 @@ const factory = (host: CustomToolFactoryHost) => {
 	const parameters = z
 		.object({
 			operation: z
-				.enum(["map", "scrape", "crawl", "status", "cancel"])
-				.describe("Firecrawl site-traversal operation to run."),
+				.enum([
+					"map",
+					"scrape",
+					"crawl",
+					"status",
+					"cancel",
+					"batch",
+					"batch_status",
+					"batch_cancel",
+					"extract",
+					"extract_status",
+					"extract_cancel",
+					"agent",
+					"agent_status",
+					"agent_cancel",
+					"interact",
+					"interact_stop",
+				])
+				.describe("Firecrawl site-traversal / extract / agent / interact operation."),
 			url: z
 				.string()
 				.trim()
@@ -740,7 +965,7 @@ const factory = (host: CustomToolFactoryHost) => {
 				.array(z.string().trim().min(1))
 				.min(1)
 				.optional()
-				.describe('Scrape output formats (default ["markdown"]). Simple format name strings, e.g. markdown, html, links.'),
+				.describe('Scrape/batch formats (default ["markdown"]). Names: markdown, html, rawHtml, links, summary, json, images, branding, product.'),
 			only_main_content: z
 				.boolean()
 				.optional()
@@ -785,14 +1010,46 @@ const factory = (host: CustomToolFactoryHost) => {
 			wait: z
 				.boolean()
 				.optional()
-				.describe("Crawl: wait for completion (default true). When false, return job_id immediately for status polling."),
-			// status / cancel
+				.describe("Wait for crawl/batch/extract/agent completion (default true). When false, return job_id immediately."),
 			job_id: z
 				.string()
 				.trim()
 				.min(1)
 				.optional()
-				.describe("Crawl job id for status or cancel operations."),
+				.describe("Job id for status/cancel of crawl, batch, extract, or agent."),
+			urls: z
+				.array(z.string().trim().min(1))
+				.min(1)
+				.max(HARD_MAX_BATCH_URLS)
+				.optional()
+				.describe(`URL list for batch/extract/agent (max ${HARD_MAX_BATCH_URLS}).`),
+			wait_for: z.number().int().min(0).max(60000).optional().describe("Scrape/batch: extra wait in ms before capture."),
+			mobile: z.boolean().optional().describe("Scrape/batch: emulate a mobile device."),
+			json_prompt: z.string().trim().min(1).optional().describe("JSON-mode prompt when formats includes json."),
+			json_schema: z.record(z.any()).optional().describe("JSON-mode schema when formats includes json."),
+			actions: z
+				.array(z.record(z.any()))
+				.max(50)
+				.optional()
+				.describe("Scrape: pre-capture browser actions (wait, click, write, press, scroll, screenshot, scrape, executeJavascript, pdf)."),
+			prompt: z.string().trim().min(1).max(10000).optional().describe("extract/agent prompt, or interact natural-language task."),
+			schema: z.record(z.any()).optional().describe("extract/agent JSON schema for structured output."),
+			enable_web_search: z.boolean().optional().describe("extract: allow web search beyond provided URLs."),
+			show_sources: z.boolean().optional().describe("extract: include sources in the response."),
+			max_concurrency: z.number().int().min(1).optional().describe("batch: max concurrent scrapes."),
+			ignore_invalid_urls: z.boolean().optional().describe("batch/extract: skip invalid URLs instead of failing."),
+			max_credits: z
+				.number()
+				.min(1)
+				.max(HARD_MAX_AGENT_CREDITS)
+				.optional()
+				.describe(`agent: credit ceiling (default ${DEFAULT_AGENT_MAX_CREDITS}, hard max ${HARD_MAX_AGENT_CREDITS}).`),
+			effort: z.enum(["low", "medium", "high"]).optional().describe("agent: spark-2 reasoning budget."),
+			strict_constrain_to_urls: z.boolean().optional().describe("agent: only visit provided urls."),
+			scrape_id: z.string().trim().min(1).optional().describe("interact/interact_stop: scrape job id from a prior scrape."),
+			code: z.string().trim().min(1).max(100000).optional().describe("interact: Playwright/agent-browser code. Mutually exclusive with prompt."),
+			language: z.enum(["node", "python", "bash"]).optional().describe("interact code language (default node)."),
+			interact_timeout: z.number().int().min(1).max(300).optional().describe("interact execution timeout in seconds (default 30)."),
 		})
 		.superRefine((params, validation) => {
 			if (params.operation === "crawl" && params.limit != null && params.limit > HARD_MAX_CRAWL_LIMIT) {
@@ -812,7 +1069,7 @@ const factory = (host: CustomToolFactoryHost) => {
 					});
 				}
 			}
-			if (op === "status" || op === "cancel") {
+			if (op === "status" || op === "cancel" || op === "batch_status" || op === "batch_cancel" || op === "extract_status" || op === "extract_cancel" || op === "agent_status" || op === "agent_cancel") {
 				if (!asString(params.job_id)) {
 					validation.addIssue({
 						code: "custom",
@@ -821,18 +1078,62 @@ const factory = (host: CustomToolFactoryHost) => {
 					});
 				}
 			}
+			if (op === "batch" || op === "extract") {
+				if (!asStringArray(params.urls)) {
+					validation.addIssue({
+						code: "custom",
+						path: ["urls"],
+						message: `urls is required for operation "${op}"`,
+					});
+				}
+			}
+			if (op === "extract" && !asString(params.prompt) && !(params.schema && typeof params.schema === "object")) {
+				validation.addIssue({
+					code: "custom",
+					path: ["prompt"],
+					message: "extract requires prompt and/or schema",
+				});
+			}
+			if (op === "agent" && !asString(params.prompt)) {
+				validation.addIssue({
+					code: "custom",
+					path: ["prompt"],
+					message: "prompt is required for operation \"agent\"",
+				});
+			}
+			if (op === "interact" || op === "interact_stop") {
+				if (!asString(params.scrape_id)) {
+					validation.addIssue({
+						code: "custom",
+						path: ["scrape_id"],
+						message: `scrape_id is required for operation "${op}"`,
+					});
+				}
+			}
+			if (op === "interact") {
+				const hasPrompt = Boolean(asString(params.prompt));
+				const hasCode = Boolean(asString(params.code));
+				if (hasPrompt === hasCode) {
+					validation.addIssue({
+						code: "custom",
+						path: ["prompt"],
+						message: "interact requires exactly one of prompt or code",
+					});
+				}
+			}
 		});
 
 	return {
 		name: "firecrawl_crawl",
-		label: "Firecrawl Crawl / Map / Scrape",
+		label: "Firecrawl Crawl / Extract / Agent",
 		approval: "read",
 		description: [
-			"Firecrawl site-traversal: map (discover URLs), scrape (single page), crawl (managed multi-page job with optional wait/poll), status, and cancel.",
+			"Firecrawl site-traversal and extraction: map, scrape, crawl, batch scrape, extract, agent, interact, plus status/cancel.",
 			"Firecrawl sends no cookies or session credentials, so this reaches PUBLIC pages only.",
-			"Behind-login or authenticated traversal needs the xd://browser device instead.",
-			"Crawling bills per scraped page — set limit carefully (crawl default 20, hard max 500).",
-			"Orphaned-job discipline: if a waiting crawl hits poll_timeout_ms or the abort signal fires, the tool DELETE-cancels the job before failing.",
+			"Behind-login traversal needs the xd://browser device. Public JS pages can scrape then interact.",
+			"Prefer scrape JSON mode for one known URL; agent when URLs are unknown; extract only when you already have URL globs.",
+			"Crawling and batch scraping bill per page — set limit/urls carefully (crawl default 20, hard max 500; batch max 100 URLs).",
+			"Agent bills dynamically (default max_credits 100, hard max 2500). Waiting jobs DELETE-cancel on timeout/abort.",
 			"Supports limited keyless mode; native Firecrawl provider credentials or FIRECRAWL_API_KEY enable authenticated requests.",
 		].join(" "),
 		parameters,
@@ -843,6 +1144,9 @@ const factory = (host: CustomToolFactoryHost) => {
 			const lines = [`Operation: ${op}`];
 			if (params.url) lines.push(`URL: ${params.url}`);
 			if (params.job_id) lines.push(`Job ID: ${params.job_id}`);
+			if (params.scrape_id) lines.push(`Scrape ID: ${params.scrape_id}`);
+			if (params.urls?.length) lines.push(`URLs: ${params.urls.length}`);
+			if (params.prompt) lines.push(`Prompt: ${compactText(params.prompt, 240)}`);
 
 			if (op === "map") {
 				if (params.limit != null) lines.push(`Limit: ${params.limit}`);
@@ -864,10 +1168,25 @@ const factory = (host: CustomToolFactoryHost) => {
 				lines.push(`Wait: ${asBoolean(params.wait, true)}`);
 				lines.push(`Poll timeout: ${params.poll_timeout_ms ?? DEFAULT_POLL_TIMEOUT_MS}ms`);
 				lines.push(`Cost: Firecrawl bills per scraped page — up to ${limit} pages this call.`);
-			} else if (op === "status") {
-				lines.push("Fetch crawl job status and accumulated pages.");
-			} else if (op === "cancel") {
-				lines.push("Cancel a running crawl job (DELETE).");
+			} else if (op === "batch") {
+				const n = params.urls?.length || 0;
+				lines.push(`Wait: ${asBoolean(params.wait, true)}`);
+				lines.push(`Cost: Firecrawl bills per scraped page — up to ${n} URLs this call.`);
+			} else if (op === "extract") {
+				lines.push(`Wait: ${asBoolean(params.wait, true)}`);
+				lines.push("Cost: extract is token-based; prefer agent for unknown URLs.");
+			} else if (op === "agent") {
+				const credits = clampInt(params.max_credits, 1, HARD_MAX_AGENT_CREDITS, DEFAULT_AGENT_MAX_CREDITS);
+				if (params.effort) lines.push(`Effort: ${params.effort}`);
+				lines.push(`Wait: ${asBoolean(params.wait, true)}`);
+				lines.push(`Cost: agent credit ceiling ${credits} (hard max ${HARD_MAX_AGENT_CREDITS}).`);
+			} else if (op === "interact") {
+				lines.push(params.code ? "Mode: code" : "Mode: prompt");
+				lines.push(`Interact timeout: ${params.interact_timeout ?? 30}s`);
+			} else if (op === "status" || op === "batch_status" || op === "extract_status" || op === "agent_status") {
+				lines.push("Fetch job status.");
+			} else if (op === "cancel" || op === "batch_cancel" || op === "extract_cancel" || op === "agent_cancel" || op === "interact_stop") {
+				lines.push("Cancel / stop the job or interact session.");
 			}
 			return lines;
 		},
@@ -973,9 +1292,254 @@ const factory = (host: CustomToolFactoryHost) => {
 					});
 					const rawResponse = await fetchFirecrawl(url, auth.token, "DELETE", undefined, signals, CANCEL_TIMEOUT_MS, onUpdate);
 					return {
-						content: [{ type: "text", text: formatCancelResults(rawResponse, jobId) }],
+						content: [{ type: "text", text: formatCancelResults(rawResponse, jobId, "crawl cancel") }],
 						details: { request: requestMeta, rawResponse, jobId },
 					};
+				}
+
+				if (op === "batch") {
+					const { body, urls, wait, pollTimeoutMs } = buildBatchBody(params);
+					const startUrl = `${root}/v2/batch/scrape`;
+					requestMeta = { ...redactRequest(auth, "POST", startUrl, body), operation: "batch" };
+					onUpdate?.({
+						content: [{ type: "text", text: `Firecrawl batch scrape starting (${urls.length} URLs)…` }],
+						details: { phase: "start", operation: "batch", urls: urls.length, wait, authenticated: Boolean(auth.token), authMode: auth.authMode },
+					});
+					const started = await fetchFirecrawl(startUrl, auth.token, "POST", body, signals, DEFAULT_TIMEOUT_MS, onUpdate, false);
+					const jobId = asString(started?.id) || asString(started?.jobId) || asString(started?.data?.id);
+					if (!jobId) throw new Error(`Firecrawl batch scrape did not return a job id: ${displayValue(started)}`);
+					requestMeta.jobId = jobId;
+					if (!wait) {
+						return {
+							content: [{
+								type: "text",
+								text: ["# Firecrawl batch scrape", `Job ID: ${jobId}`, "Status: started (wait=false)", `Poll with { operation: "batch_status", job_id: "${jobId}" }.`].join("\n"),
+							}],
+							details: { request: requestMeta, rawResponse: started, jobId },
+						};
+					}
+					const statusUrl = `${root}/v2/batch/scrape/${encodeURIComponent(jobId)}`;
+					try {
+						const statusPayload = await waitForStatus(statusUrl, auth.token, jobId, signals, pollTimeoutMs, onUpdate, BATCH_TERMINAL, "batch scrape");
+						const collected = await collectCrawlPages(statusUrl, auth.token, signals, DEFAULT_TIMEOUT_MS, onUpdate, urls.length, statusPayload);
+						const creditsUsed = collectCredits(collected.payload) ?? collectCredits(statusPayload);
+						const details = { request: requestMeta, rawResponse: { start: started, status: collected.payload || statusPayload, pages: collected.pages }, pagination: collected.pagination, jobId };
+						if (creditsUsed != null) details.creditsUsed = creditsUsed;
+						return {
+							content: [{ type: "text", text: formatBatchResults(collected.payload || statusPayload, collected.pages, jobId, collected.pagination) }],
+							details,
+						};
+					} catch (waitError) {
+						onUpdate?.({ content: [{ type: "text", text: `Firecrawl batch interrupted — cancelling job ${jobId}…` }], details: { phase: "cancel", jobId } });
+						const cancellation = await cancelJob(statusUrl, auth.token, jobId);
+						const original = waitError instanceof Error ? waitError.message : String(waitError);
+						const cancelLine = cancellation.ok
+							? `Cancellation: attempted for job ${jobId} — ok.`
+							: `Cancellation: attempted for job ${jobId} — failed${cancellation.error ? ` (${cancellation.error})` : ""}.`;
+						return {
+							isError: true,
+							content: [{ type: "text", text: `Error: ${original} ${cancelLine}` }],
+							details: { request: requestMeta, jobId, cancellation, rawResponse: started },
+						};
+					}
+				}
+
+				if (op === "batch_status") {
+					const jobId = params.job_id;
+					const url = `${root}/v2/batch/scrape/${encodeURIComponent(jobId)}`;
+					requestMeta = { ...redactRequest(auth, "GET", url, undefined), operation: "batch_status", jobId };
+					onUpdate?.({ content: [{ type: "text", text: `Firecrawl batch status (${jobId})…` }], details: { phase: "start", operation: "batch_status", jobId } });
+					const seed = await fetchFirecrawl(url, auth.token, "GET", undefined, signals, DEFAULT_TIMEOUT_MS, onUpdate);
+					const pageLimit = clampInt(params.limit, 1, HARD_MAX_CRAWL_LIMIT, HARD_MAX_CRAWL_LIMIT);
+					const collected = await collectCrawlPages(url, auth.token, signals, DEFAULT_TIMEOUT_MS, onUpdate, pageLimit, seed);
+					const creditsUsed = collectCredits(collected.payload) ?? collectCredits(seed);
+					const details = { request: requestMeta, rawResponse: collected.payload || seed, pagination: collected.pagination, jobId };
+					if (creditsUsed != null) details.creditsUsed = creditsUsed;
+					return {
+						content: [{ type: "text", text: formatBatchResults(collected.payload || seed, collected.pages, jobId, collected.pagination) }],
+						details,
+					};
+				}
+
+				if (op === "batch_cancel") {
+					const jobId = params.job_id;
+					const url = `${root}/v2/batch/scrape/${encodeURIComponent(jobId)}`;
+					requestMeta = { ...redactRequest(auth, "DELETE", url, undefined), operation: "batch_cancel", jobId };
+					onUpdate?.({ content: [{ type: "text", text: `Firecrawl batch cancel (${jobId})…` }], details: { phase: "start", operation: "batch_cancel", jobId } });
+					const rawResponse = await fetchFirecrawl(url, auth.token, "DELETE", undefined, signals, CANCEL_TIMEOUT_MS, onUpdate);
+					return {
+						content: [{ type: "text", text: formatCancelResults(rawResponse, jobId, "batch cancel") }],
+						details: { request: requestMeta, rawResponse, jobId },
+					};
+				}
+
+				if (op === "extract") {
+					const { body, wait, pollTimeoutMs } = buildExtractBody(params);
+					const startUrl = `${root}/v2/extract`;
+					requestMeta = { ...redactRequest(auth, "POST", startUrl, body), operation: "extract" };
+					onUpdate?.({
+						content: [{ type: "text", text: "Firecrawl extract starting…" }],
+						details: { phase: "start", operation: "extract", wait, authenticated: Boolean(auth.token), authMode: auth.authMode },
+					});
+					const started = await fetchFirecrawl(startUrl, auth.token, "POST", body, signals, DEFAULT_TIMEOUT_MS, onUpdate, false);
+					const jobId = asString(started?.id) || asString(started?.jobId) || asString(started?.data?.id);
+					if (!jobId) throw new Error(`Firecrawl extract did not return a job id: ${displayValue(started)}`);
+					requestMeta.jobId = jobId;
+					if (!wait) {
+						return {
+							content: [{
+								type: "text",
+								text: ["# Firecrawl extract", `Job ID: ${jobId}`, "Status: started (wait=false)", `Poll with { operation: "extract_status", job_id: "${jobId}" }.`].join("\n"),
+							}],
+							details: { request: requestMeta, rawResponse: started, jobId },
+						};
+					}
+					const statusUrl = `${root}/v2/extract/${encodeURIComponent(jobId)}`;
+					try {
+						const statusPayload = await waitForStatus(statusUrl, auth.token, jobId, signals, pollTimeoutMs, onUpdate, EXTRACT_TERMINAL, "extract");
+						return {
+							content: [{ type: "text", text: formatExtractResults(statusPayload, jobId) }],
+							details: { request: requestMeta, rawResponse: { start: started, status: statusPayload }, jobId, creditsUsed: collectCredits(statusPayload) },
+						};
+					} catch (waitError) {
+						onUpdate?.({ content: [{ type: "text", text: `Firecrawl extract interrupted — cancelling job ${jobId}…` }], details: { phase: "cancel", jobId } });
+						const cancellation = await cancelJob(statusUrl, auth.token, jobId);
+						const original = waitError instanceof Error ? waitError.message : String(waitError);
+						const cancelLine = cancellation.ok
+							? `Cancellation: attempted for job ${jobId} — ok.`
+							: `Cancellation: attempted for job ${jobId} — failed${cancellation.error ? ` (${cancellation.error})` : ""}.`;
+						return {
+							isError: true,
+							content: [{ type: "text", text: `Error: ${original} ${cancelLine}` }],
+							details: { request: requestMeta, jobId, cancellation, rawResponse: started },
+						};
+					}
+				}
+
+				if (op === "extract_status") {
+					const jobId = params.job_id;
+					const url = `${root}/v2/extract/${encodeURIComponent(jobId)}`;
+					requestMeta = { ...redactRequest(auth, "GET", url, undefined), operation: "extract_status", jobId };
+					onUpdate?.({ content: [{ type: "text", text: `Firecrawl extract status (${jobId})…` }], details: { phase: "start", operation: "extract_status", jobId } });
+					const rawResponse = await fetchFirecrawl(url, auth.token, "GET", undefined, signals, DEFAULT_TIMEOUT_MS, onUpdate);
+					return {
+						content: [{ type: "text", text: formatExtractResults(rawResponse, jobId) }],
+						details: { request: requestMeta, rawResponse, jobId, creditsUsed: collectCredits(rawResponse) },
+					};
+				}
+
+				if (op === "extract_cancel") {
+					const jobId = params.job_id;
+					const url = `${root}/v2/extract/${encodeURIComponent(jobId)}`;
+					requestMeta = { ...redactRequest(auth, "DELETE", url, undefined), operation: "extract_cancel", jobId };
+					onUpdate?.({ content: [{ type: "text", text: `Firecrawl extract cancel (${jobId})…` }], details: { phase: "start", operation: "extract_cancel", jobId } });
+					const rawResponse = await fetchFirecrawl(url, auth.token, "DELETE", undefined, signals, CANCEL_TIMEOUT_MS, onUpdate);
+					return {
+						content: [{ type: "text", text: formatCancelResults(rawResponse, jobId, "extract cancel") }],
+						details: { request: requestMeta, rawResponse, jobId },
+					};
+				}
+
+
+				if (op === "agent") {
+					const { body, maxCredits, wait, pollTimeoutMs } = buildAgentBody(params);
+					const startUrl = `${root}/v2/agent`;
+					requestMeta = { ...redactRequest(auth, "POST", startUrl, body), operation: "agent" };
+					onUpdate?.({
+						content: [{ type: "text", text: `Firecrawl agent starting (maxCredits ${maxCredits})…` }],
+						details: { phase: "start", operation: "agent", maxCredits, wait, authenticated: Boolean(auth.token), authMode: auth.authMode },
+					});
+					const started = await fetchFirecrawl(startUrl, auth.token, "POST", body, signals, DEFAULT_TIMEOUT_MS, onUpdate, false);
+					const jobId = asString(started?.id) || asString(started?.jobId) || asString(started?.data?.id);
+					if (!jobId) throw new Error(`Firecrawl agent did not return a job id: ${displayValue(started)}`);
+					requestMeta.jobId = jobId;
+					if (!wait) {
+						return {
+							content: [{
+								type: "text",
+								text: ["# Firecrawl agent", `Job ID: ${jobId}`, "Status: started (wait=false)", `Poll with { operation: "agent_status", job_id: "${jobId}" }.`].join("\n"),
+							}],
+							details: { request: requestMeta, rawResponse: started, jobId },
+						};
+					}
+					const statusUrl = `${root}/v2/agent/${encodeURIComponent(jobId)}`;
+					try {
+						const statusPayload = await waitForStatus(statusUrl, auth.token, jobId, signals, pollTimeoutMs, onUpdate, AGENT_TERMINAL, "agent");
+						return {
+							content: [{ type: "text", text: formatAgentResults(statusPayload, jobId) }],
+							details: { request: requestMeta, rawResponse: { start: started, status: statusPayload }, jobId, creditsUsed: collectCredits(statusPayload) },
+						};
+					} catch (waitError) {
+						onUpdate?.({ content: [{ type: "text", text: `Firecrawl agent interrupted — cancelling job ${jobId}…` }], details: { phase: "cancel", jobId } });
+						const cancellation = await cancelJob(statusUrl, auth.token, jobId);
+						const original = waitError instanceof Error ? waitError.message : String(waitError);
+						const cancelLine = cancellation.ok
+							? `Cancellation: attempted for job ${jobId} — ok.`
+							: `Cancellation: attempted for job ${jobId} — failed${cancellation.error ? ` (${cancellation.error})` : ""}.`;
+						return {
+							isError: true,
+							content: [{ type: "text", text: `Error: ${original} ${cancelLine}` }],
+							details: { request: requestMeta, jobId, cancellation, rawResponse: started },
+						};
+					}
+				}
+
+				if (op === "agent_status") {
+					const jobId = params.job_id;
+					const url = `${root}/v2/agent/${encodeURIComponent(jobId)}`;
+					requestMeta = { ...redactRequest(auth, "GET", url, undefined), operation: "agent_status", jobId };
+					onUpdate?.({ content: [{ type: "text", text: `Firecrawl agent status (${jobId})…` }], details: { phase: "start", operation: "agent_status", jobId } });
+					const rawResponse = await fetchFirecrawl(url, auth.token, "GET", undefined, signals, DEFAULT_TIMEOUT_MS, onUpdate);
+					return {
+						content: [{ type: "text", text: formatAgentResults(rawResponse, jobId) }],
+						details: { request: requestMeta, rawResponse, jobId, creditsUsed: collectCredits(rawResponse) },
+					};
+				}
+
+				if (op === "agent_cancel") {
+					const jobId = params.job_id;
+					const url = `${root}/v2/agent/${encodeURIComponent(jobId)}`;
+					requestMeta = { ...redactRequest(auth, "DELETE", url, undefined), operation: "agent_cancel", jobId };
+					onUpdate?.({ content: [{ type: "text", text: `Firecrawl agent cancel (${jobId})…` }], details: { phase: "start", operation: "agent_cancel", jobId } });
+					const rawResponse = await fetchFirecrawl(url, auth.token, "DELETE", undefined, signals, CANCEL_TIMEOUT_MS, onUpdate);
+					return {
+						content: [{ type: "text", text: formatCancelResults(rawResponse, jobId, "agent cancel") }],
+						details: { request: requestMeta, rawResponse, jobId },
+					};
+				}
+
+				if (op === "interact") {
+					const scrapeId = params.scrape_id;
+					const url = `${root}/v2/scrape/${encodeURIComponent(scrapeId)}/interact`;
+					const body = buildInteractBody(params);
+					const timeoutMs = ((params.interact_timeout ?? 30) + 5) * 1000;
+					requestMeta = { ...redactRequest(auth, "POST", url, body), operation: "interact", scrapeId };
+					onUpdate?.({
+						content: [{ type: "text", text: `Firecrawl interact (${scrapeId})…` }],
+						details: { phase: "start", operation: "interact", scrapeId, authenticated: Boolean(auth.token), authMode: auth.authMode },
+					});
+					const rawResponse = await fetchFirecrawl(url, auth.token, "POST", body, signals, timeoutMs, onUpdate, false);
+					return {
+						content: [{ type: "text", text: formatInteractResults(rawResponse, scrapeId) }],
+						details: { request: requestMeta, rawResponse, scrapeId },
+					};
+				}
+
+				if (op === "interact_stop") {
+					const scrapeId = params.scrape_id;
+					const url = `${root}/v2/scrape/${encodeURIComponent(scrapeId)}/interact`;
+					requestMeta = { ...redactRequest(auth, "DELETE", url, undefined), operation: "interact_stop", scrapeId };
+					onUpdate?.({ content: [{ type: "text", text: `Firecrawl interact stop (${scrapeId})…` }], details: { phase: "start", operation: "interact_stop", scrapeId } });
+					const rawResponse = await fetchFirecrawl(url, auth.token, "DELETE", undefined, signals, CANCEL_TIMEOUT_MS, onUpdate);
+					return {
+						content: [{ type: "text", text: formatCancelResults(rawResponse, scrapeId, "interact stop") }],
+						details: { request: requestMeta, rawResponse, scrapeId },
+					};
+				}
+
+
+				if (op !== "crawl") {
+					throw new Error(`Unsupported Firecrawl operation: ${op}`);
 				}
 
 				// crawl
@@ -1072,7 +1636,7 @@ const factory = (host: CustomToolFactoryHost) => {
 							content: [{ type: "text", text: `Firecrawl crawl interrupted — cancelling job ${jobId}…` }],
 							details: { phase: "cancel", jobId },
 						});
-						cancellation = await cancelCrawlJob(root, auth.token, jobId);
+						cancellation = await cancelJob(`${root}/v2/crawl/${encodeURIComponent(jobId)}`, auth.token, jobId);
 					}
 
 					const original = waitError instanceof Error ? waitError.message : String(waitError);

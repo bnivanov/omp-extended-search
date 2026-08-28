@@ -1,8 +1,8 @@
 # firecrawl_search
 
-Direct access to Firecrawl's `POST https://api.firecrawl.dev/v2/search` endpoint. The extension is the **advanced/direct Firecrawl lane**: omp's built-in `web_search` remains the everyday choice.
+Direct access to Firecrawl Search v2 plus the Research and Developer indexes. The extension is the **advanced/direct Firecrawl lane**: omp's built-in `web_search` remains the everyday choice.
 
-Since omp 17.0.9, native `web_search` can itself use Firecrawl, including limited keyless access, **only when Firecrawl is explicitly selected in `providers.webSearchOrder`**. The automatic provider chain remains credential-gated, and this installer does not set provider order. That native lane overlaps the basic `query` + `limit` case. `xd://firecrawl_search` remains useful when you need to choose Firecrawl explicitly or use its web/news/images sources, GitHub/research/PDF categories, domain/date/location filters, highlights and scrape controls, or raw response metadata.
+Since omp 17.0.9, native `web_search` can itself use Firecrawl, including limited keyless access, **only when Firecrawl is explicitly selected in `providers.webSearchOrder`**. The automatic provider chain remains credential-gated, and this installer does not set provider order. That native lane overlaps the basic `query` + `limit` SERP case. `xd://firecrawl_search` remains useful when you need to choose Firecrawl explicitly, pick an index (`papers` / `paper` / `related` / `developer`), or use web/news/images sources, GitHub/research/PDF categories, domain/date/location filters, highlights and scrape controls, or raw response metadata.
 
 ## Credentials
 
@@ -26,10 +26,12 @@ User-facing keys are `snake_case`; the tool translates them to Firecrawl's `came
 
 | Input | Default | Meaning / Firecrawl payload |
 |---|---|---|
-| `query` | required | Search query, at most 500 characters. |
-| `limit` | `10` | Results **per source**, 1–100. |
-| `sources` | `["web"]` | Any of `web`, `news`, `images`. Sent as `sources`. |
-| `categories` | omitted | Any of `github`, `research`, `pdf`. Sent as `categories`. |
+| `operation` | `search` | `search` (SERP), `papers` (paper index), `paper` (inspect/read one paper), `related` (citation graph), `developer` (issues/PRs/READMEs/docs). |
+| `query` | required for search/papers/developer | Search query. SERP max 500 characters; papers/developer allow longer. Optional paper-read question; related intent fallback. |
+| `limit` | `10` | SERP results **per source**, 1–100. |
+| `k` | `10` | Index result count: papers/related max 500; developer max 100; paper passages max 50. |
+| `sources` | `["web"]` | Any of `web`, `news`, `images`. Sent as `sources`. SERP only. |
+| `categories` | omitted | Any of `github`, `developer`, `research`, `pdf`. `github` aliases to `developer`. `developer` cannot mix with other SERP categories — use `operation=developer` for the developer index. |
 | `include_domains` | omitted | Hostnames to include; sent as `includeDomains`. Mutually exclusive with `exclude_domains`. |
 | `exclude_domains` | omitted | Hostnames to exclude; sent as `excludeDomains`. Mutually exclusive with `include_domains`. |
 | `recency` | omitted | Convenience value `hour`, `day`, `week`, `month`, or `year`; maps to `tbs=qdr:h`, `qdr:d`, `qdr:w`, `qdr:m`, or `qdr:y`. |
@@ -137,13 +139,40 @@ write xd://firecrawl_search
 
 The last request allows up to five results **from each source** and asks Firecrawl to scrape a summary for each result, so plan for both search credits and additional scrape cost/latency. For an ordinary lookup with no Firecrawl-specific control, use omp's built-in `web_search` instead.
 
+## Research and Developer indexes
+
+These are **not** the SERP `categories: ["research"]` website filter. They hit Firecrawl's paper and developer indexes.
+
+| `operation` | Endpoint | Required |
+|---|---|---|
+| `papers` | `GET /v2/search/index/papers` | `query` |
+| `paper` | `GET /v2/search/index/papers/{paper_id}` | `paper_id` |
+| `related` | `GET /v2/search/index/papers/{paper_id}/related` | `paper_id` plus `intent` or `query` |
+| `developer` | `GET /v2/search/index/developer` | `query` |
+
+| Input | Used by | Meaning |
+|---|---|---|
+| `paper_id` | paper, related | Canonical `paperId` or `primaryId` such as `arxiv:2105.05233`. |
+| `authors`, `paper_categories`, `from`, `to` | papers | Author substring, category, inclusive `YYYY-MM-DD` date bounds. |
+| `intent`, `related_mode`, `rerank`, `anchors` | related | Ranking intent; `similar` / `citers` / `references`; extra rerank; extra seed ids. |
+| `types`, `repos`, `doc_sources`, `skills`, `passages` | developer | Result kinds (`doc`/`issue`/`pull_request`/`readme`); repo slugs; doc source ids (max 20); `skills: "only"`; passages per result (1–5). |
+| `language`, `topic`, `license`, `min_stars`, `max_stars`, `archived`, `fork` | developer | Repository filters. |
+
+```text
+write xd://firecrawl_search
+{"operation":"papers","query":"agent memory","k":10,"from":"2024-01-01"}
+
+write xd://firecrawl_search
+{"operation":"developer","query":"firecrawl scrape interact","repos":["firecrawl/firecrawl"],"types":["doc","readme"]}
+```
+
 ---
 
 # firecrawl_crawl
 
-Sibling tool at **`xd://firecrawl_crawl`** for Firecrawl site-traversal endpoints that `firecrawl_search` does not wire: **map** (URL discovery), **scrape** (single page), **crawl** (managed multi-page job with optional wait/poll), **status**, and **cancel**.
+Sibling tool at **`xd://firecrawl_crawl`** for Firecrawl endpoints that `firecrawl_search` does not wire: **map**, **scrape**, **crawl**, **batch scrape**, **extract**, **agent**, **interact**, plus status/cancel.
 
-> **Public pages only.** Firecrawl sends no cookies or session credentials, so `firecrawl_crawl` reaches **PUBLIC pages only**. Behind-login or authenticated traversal needs the `xd://browser` device instead.
+> **Public pages only.** Firecrawl sends no cookies or session credentials, so `firecrawl_crawl` reaches **PUBLIC pages only**. Behind-login traversal needs the `xd://browser` device. Public JS pages can `scrape` then `interact`.
 
 Credentials match `firecrawl_search`: omp session/provider Firecrawl credential, then `FIRECRAWL_API_KEY`, then limited keyless mode. Optional `FIRECRAWL_BASE_URL` overrides the default `https://api.firecrawl.dev`.
 
@@ -152,22 +181,38 @@ Credentials match `firecrawl_search`: omp session/provider Firecrawl credential,
 | `operation` | Endpoint | What it does |
 |---|---|---|
 | `map` | `POST /v2/map` | Discover URLs for a site (cheap shape check). |
-| `scrape` | `POST /v2/scrape` | Fetch one page in the requested formats. |
+| `scrape` | `POST /v2/scrape` | Fetch one page in the requested formats (incl. JSON mode). |
 | `crawl` | `POST /v2/crawl` (+ poll) | Start a managed multi-page crawl; wait or return a job id. |
 | `status` | `GET /v2/crawl/{job_id}` | Poll a crawl job and accumulate pages via `next` cursors. |
 | `cancel` | `DELETE /v2/crawl/{job_id}` | Cancel a running crawl job. |
+| `batch` | `POST /v2/batch/scrape` | Scrape many known URLs in one job (max 100). |
+| `batch_status` / `batch_cancel` | `GET` / `DELETE /v2/batch/scrape/{job_id}` | Poll or cancel a batch job. |
+| `extract` | `POST /v2/extract` | LLM extract from known URLs (wildcards allowed). Prefer agent when URLs are unknown. |
+| `extract_status` / `extract_cancel` | `GET` / `DELETE /v2/extract/{job_id}` | Poll or cancel extract. |
+| `agent` | `POST /v2/agent` | Autonomous gather when URLs are unknown. Credit ceiling via `max_credits`. |
+| `agent_status` / `agent_cancel` | `GET` / `DELETE /v2/agent/{job_id}` | Poll or cancel agent. Cancelled jobs report `failed`. |
+| `interact` | `POST /v2/scrape/{scrape_id}/interact` | Prompt or Playwright/code against a prior scrape session. |
+| `interact_stop` | `DELETE /v2/scrape/{scrape_id}/interact` | Stop an interact session. |
 
 User-facing keys are `snake_case`; the tool translates them to Firecrawl's `camelCase` payload keys.
+
+**Extractor pick:** scrape JSON mode for one known URL; agent when URLs are unknown; extract only when you already have URL globs. Interact is for a live scrape session, not a substitute for `xd://browser` behind login.
 
 ## Shared / common parameters
 
 | Input | Default | Meaning |
 |---|---|---|
-| `operation` | required | One of `map`, `scrape`, `crawl`, `status`, `cancel`. |
+| `operation` | required | One of the operations in the table above. |
 | `url` | required for map/scrape/crawl | Target URL. |
-| `job_id` | required for status/cancel | Crawl job id returned by a prior `crawl` start. |
-| `limit` | see per-op | Map: max URLs (1–100000). Crawl: max pages (default **20**, hard max **500**). Status: max pages to accumulate when following `next` (default hard max 500). |
-| `timeout_ms` | `60000` (scrape) | Scrape request timeout in ms (1000–300000). Map and crawl-start use a 60s client timeout internally. |
+| `urls` | required for batch/extract | URL list (max 100). Optional for agent. |
+| `job_id` | required for *status / *cancel | Job id from a prior start. |
+| `scrape_id` | required for interact / interact_stop | Scrape id from a prior `scrape` (shown in scrape output). |
+| `limit` | see per-op | Map: max URLs (1–100000). Crawl: max pages (default **20**, hard max **500**). Status: max pages to accumulate when following `next`. |
+| `wait` | `true` | Wait for crawl/batch/extract/agent completion. When false, return `job_id` immediately. |
+| `poll_timeout_ms` | **300000** (5 min) | Max milliseconds to poll when `wait` is true (clamped 1000–3_600_000). |
+| `timeout_ms` | `60000` (scrape) | Scrape request timeout in ms (1000–300000). Map and job-start use a 60s client timeout internally. |
+| `prompt` | — | extract/agent natural-language task, or interact prompt (mutually exclusive with `code`). |
+| `schema` | — | extract/agent JSON schema. |
 
 ## `map`
 
@@ -192,14 +237,18 @@ Fetch a single page.
 | Input | Default | Meaning / payload |
 |---|---|---|
 | `url` | required | Page URL. |
-| `formats` | `["markdown"]` | Simple format name strings, e.g. `markdown`, `html`, `links`, `summary`, `rawHtml`. |
+| `formats` | `["markdown"]` | Format names: `markdown`, `html`, `rawHtml`, `links`, `summary`, `json`, `images`, `branding`, `product`. `json` becomes `{ type: "json", prompt, schema }` when `json_prompt` / `json_schema` are set. |
 | `only_main_content` | `true` | Omit page chrome; sent as `onlyMainContent`. |
 | `max_age_ms` | omitted | Cache age in ms; sent as `maxAge`. |
 | `timeout_ms` | `60000` | Request timeout (1000–300000); sent as `timeout`. |
+| `wait_for` | omitted | Extra wait in ms before capture; sent as `waitFor`. |
+| `mobile` | omitted | Emulate a mobile device. |
+| `json_prompt` / `json_schema` | omitted | JSON-mode prompt and schema when `formats` includes `json`. |
+| `actions` | omitted | Pre-capture browser actions (`wait`, `click`, `write`, `press`, `scroll`, `screenshot`, `scrape`, `executeJavascript`, `pdf`). |
 | `include_tags` | omitted | HTML tags to include; sent as `includeTags`. |
 | `exclude_tags` | omitted | HTML tags to exclude; sent as `excludeTags`. |
 
-Text output shows title, URL, status code, the first available of markdown/summary/html/rawHtml (quoted, truncated in the visible text with full content in `details.rawResponse`), and up to 30 links when present. Scrape does not attach a pagination block.
+Text output shows title, URL, scrape id (when present), status code, json/markdown/summary/html/rawHtml (quoted, truncated in the visible text with full content in `details.rawResponse`), and up to 30 links when present. A scrape id is required for later `interact`. Scrape does not attach a pagination block.
 
 **Verified live while building the tool:** `scrape` of `https://example.com` returned markdown with status 200.
 
@@ -283,24 +332,86 @@ Fetches current status, accumulates pages the same way as a finished wait, and r
 
 Explicit cancel path (same DELETE as the automatic orphan cleanup). Returns a short confirmation with job id and status.
 
+## `batch` / `batch_status` / `batch_cancel`
+
+Scrape many known URLs in one job. Same wait/poll/cancel pattern as crawl. Hard max **100** URLs.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `urls` | required | Pages to scrape (max 100). |
+| `formats`, `only_main_content`, `max_age_ms`, `wait_for`, `mobile` | same as scrape | Applied to every URL. |
+| `max_concurrency` | omitted | Max concurrent scrapes. |
+| `ignore_invalid_urls` | omitted | Skip invalid URLs instead of failing. |
+| `wait` / `poll_timeout_ms` | `true` / 300000 | Same as crawl. |
+
+Job creation (`POST /v2/batch/scrape`) is never retried. Waiting jobs DELETE-cancel on timeout/abort.
+
+## `extract` / `extract_status` / `extract_cancel`
+
+LLM extraction from **known** URLs (wildcards like `https://docs.firecrawl.dev/*` allowed). Requires `prompt` and/or `schema`. Prefer `agent` when you do not already have URLs.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `urls` | required | URL list or globs (max 100). |
+| `prompt` / `schema` | one required | Natural-language extract task and/or JSON schema. |
+| `enable_web_search` | omitted | Allow following links outside the URL set. |
+| `include_subdomains` | omitted | Include subdomains. |
+| `show_sources` | omitted | Include sources in the response. |
+| `ignore_invalid_urls` | omitted | Skip invalid URLs. |
+| `wait` / `poll_timeout_ms` | `true` / 300000 | Same as crawl. |
+
+Waiting extract jobs attempt DELETE-cancel on timeout/abort.
+
+## `agent` / `agent_status` / `agent_cancel`
+
+Autonomous gather when URLs are **unknown**. Prompt is required. URLs, if supplied, only focus the agent.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `prompt` | required | What to gather. |
+| `schema` | omitted | Structured output schema. |
+| `urls` | omitted | Optional focus URLs. |
+| `max_credits` | **100** | Credit ceiling; hard max **2500**. |
+| `effort` | omitted | `low` / `medium` / `high` (spark-2). |
+| `strict_constrain_to_urls` | omitted | Only visit provided URLs. |
+| `wait` / `poll_timeout_ms` | `true` / 300000 | Same as crawl. |
+
+Agent bills dynamically. Waiting jobs DELETE-cancel on timeout/abort. Cancelled jobs report status `failed`.
+
+## `interact` / `interact_stop`
+
+Drive a prior scrape session. Requires `scrape_id` from a scrape result, and **exactly one** of `prompt` or `code`.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `scrape_id` | required | From a prior scrape. |
+| `prompt` | one of prompt/code | Natural-language interact task. |
+| `code` | one of prompt/code | Playwright / agent-browser code. |
+| `language` | `node` | `node` / `python` / `bash` when using `code`. |
+| `interact_timeout` | 30 | Execution timeout in **seconds** (1–300). |
+
+Public pages only. Behind-login still needs `xd://browser`.
+
 ## Resilience
 
 Same family of retry/backoff as `firecrawl_search`: bounded exponential jitter (base 500 ms, cap 8 s, 3 attempts), `Retry-After` honored against the remaining deadline, aborts normalized to `AbortError`, and the active timeout interrupts a retry sleep.
 
 Status-specific details:
 
-- **Billed POSTs** (`map`, `scrape`, and other non-GET bodies): retry **408 / 425 / 429 / 502 / 503 / 504** only — **`500` excluded** because the server may already have billed.
+- **Billed POSTs** (`map`, `scrape`, `interact`, and other non-GET bodies): retry **408 / 425 / 429 / 502 / 503 / 504** only — **`500` excluded** because the server may already have billed.
 - **GET / DELETE** (status polls, `next` pages, explicit cancel through the shared helper): the retryable set also includes **500**.
-- **Crawl job creation** (`POST /v2/crawl`) sets `retry: false` and is **never retried**, even on transport errors, so a lost response cannot start a second billed run.
-- Poll-loop sleeps are abort-aware; caller abort during wait triggers the DELETE cancel path above.
+- **Job creation** (`POST /v2/crawl`, `/v2/batch/scrape`, `/v2/extract`, `/v2/agent`, and `POST …/interact`) sets `retry: false` and is **never retried**, even on transport errors, so a lost response cannot start a second billed run.
+- Poll-loop sleeps are abort-aware; caller abort during wait triggers the DELETE cancel path for crawl, batch, extract, and agent.
 
 ## Cost and latency
 
-- **`scrape` and `crawl` bill per page.** Treat every crawled/scraped URL as a chargeable unit.
-- **Rule of thumb:** `crawl` cost scales with the page `limit` (default 20, hard max 500). Approval text surfaces `Cost: Firecrawl bills per scraped page — up to N pages this call.`
+- **`scrape`, `batch`, and `crawl` bill per page.** Treat every crawled/scraped URL as a chargeable unit.
+- **Rule of thumb:** `crawl` cost scales with the page `limit` (default 20, hard max 500). Batch scales with `urls.length` (max 100). Approval text surfaces `Cost: Firecrawl bills per scraped page — up to N pages this call.`
 - **`map` is the cheap way to see a site's shape first** — discover URLs and decide what to scrape/crawl before spending per-page credits.
+- **Extractor pick:** scrape JSON mode (one known URL) is cheapest; extract is for known URL globs; agent bills dynamically (default ceiling 100 credits, hard max 2500).
+- **Interact** bills the live session; keep `interact_timeout` tight.
 - Keyless mode remains limited; a stored credential or `FIRECRAWL_API_KEY` raises limits but does not make per-page work free.
-- Waiting crawls can run up to `poll_timeout_ms` (default 5 minutes) plus page-accumulation time; use `wait: false` when you want to start the job and poll later.
+- Waiting jobs can run up to `poll_timeout_ms` (default 5 minutes) plus page-accumulation time; use `wait: false` when you want to start the job and poll later.
 
 ## Invocation
 
@@ -340,4 +451,33 @@ write xd://firecrawl_crawl
 
 write xd://firecrawl_crawl
 {"operation":"cancel","job_id":"<id from start>"}
+```
+
+### Scrape JSON mode (one known URL)
+
+
+```text
+write xd://firecrawl_crawl
+{"operation":"scrape","url":"https://docs.firecrawl.dev","formats":["json"],"json_prompt":"Extract the page title and description"}
+```
+
+### Batch scrape known URLs
+
+```text
+write xd://firecrawl_crawl
+{"operation":"batch","urls":["https://example.com","https://docs.firecrawl.dev"],"formats":["markdown"],"wait":true}
+```
+
+### Agent when URLs are unknown
+
+```text
+write xd://firecrawl_crawl
+{"operation":"agent","prompt":"Find Firecrawl's founders and current pricing","max_credits":50,"effort":"low","wait":true}
+```
+
+### Interact with a prior scrape
+
+```text
+write xd://firecrawl_crawl
+{"operation":"interact","scrape_id":"<id from scrape>","prompt":"Click Pricing and extract the plan names"}
 ```

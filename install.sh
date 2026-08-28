@@ -52,8 +52,8 @@ Tools (pick one or more):
   reddit          reddit_search.ts       — Reddit via Arctic Shift archive (no key)
   github          github_search.ts       — GitHub repo search, trending/new projects
   producthunt     producthunt_search.ts  — Product Hunt launches (Developer Token, not API Key)
-  firecrawl       firecrawl_search.ts    — advanced direct Firecrawl search (keyless limited; optional FIRECRAWL_API_KEY)
-  firecrawl-crawl firecrawl_crawl.ts     — Firecrawl crawl/map (same Firecrawl credential as firecrawl)
+  firecrawl       firecrawl_search.ts    — Firecrawl search + paper/developer indexes (keyless limited; optional FIRECRAWL_API_KEY)
+  firecrawl-crawl firecrawl_crawl.ts     — Firecrawl map/scrape/crawl/batch/extract/agent/interact (same credential)
   tavily          tavily_search.ts       — Tavily AI search, extract, map, crawl, and quota (TAVILY_API_KEY)
   all             all of the above (install / update --all)
 
@@ -429,8 +429,8 @@ print_epilogue() {
   wants exa && echo "       \"use exa for search: ...\""
   wants parallel && echo "       \"use parallel for search: ...\""
   wants tavily && echo "       \"use tavily for search: ...\""
-  wants firecrawl && echo "       \"use firecrawl for advanced direct search: ...\""
-  wants firecrawl-crawl && echo "       \"use firecrawl-crawl to crawl/map ...\""
+  wants firecrawl && echo "       \"use firecrawl for advanced direct search / papers / developer index: ...\""
+  wants firecrawl-crawl && echo "       \"use firecrawl-crawl to map/scrape/crawl/extract ...\""
   wants hackernews && echo "       \"search hacker news for ...\" / \"what's on the front page of HN?\""
   wants feed && echo "       \"check the ai-labs feeds for ...\""
   wants arxiv && echo "       \"find recent arxiv papers on ...\""
