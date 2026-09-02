@@ -1,6 +1,6 @@
 # Research capability catalog
 
-Source of truth for constructing a research plan. This is **not** a first-use-this ladder. Pick the cheapest mix that can answer, then show **chosen vs rejected** in the visible plan.
+Source of truth for constructing a research plan. This is the **capability map** of every exposed lane. It is **not** a first-use-this ladder. The model picks the mix from these rows, then shows **chosen vs rejected** in the visible plan.
 
 Costs are **guidance**, not quotes. Plans must say so. No per-call spend guard exists.
 
@@ -35,8 +35,9 @@ Invoke: `read xd://<name>` for schema, then `write` JSON to the same path. Never
 | arXiv preprints | `arxiv_search` | CS/AI primary preprints + PDF URLs | Paywalled publisher pages | $0. ~1 req / 3s polite. |
 | Product Hunt launches | `producthunt_search` | Launches by **topic + date** | Keyword search (API cannot grep) | Needs Developer Token. Lists, does not search. |
 | RSS / lab blogs | `feed_search` | Newsletters, Substack/Medium, `ai-labs` / `tech-news` bundles | Ad-hoc web discovery | $0 |
-| X / Twitter public posts | `x_search` | Live posts, handles, topic synthesis | Write/DM/protected; exact metrics/archive | xAI login or `XAI_API_KEY`. `focus=relevance` default; volume is broader/noisier. Capture: syndication free; Firecrawl capture spends credits. |
-| X / Twitter operators + metrics | `x_api` | Exact query, `public_metrics`, threads, user/timeline, 7d or archive, counts | Grok synthesis; write/DM/stream | `X_BEARER_TOKEN`. ~$0.005/post read. Default 10; pass `next_token` yourself. |
+| X / Twitter public posts (Grok) | `x_search` | Live posts, handles, topic synthesis | Exact operators, `public_metrics`, archive, write/DM | xAI login or `XAI_API_KEY`. `focus=relevance` default; volume is broader/noisier. Capture: syndication free; Firecrawl capture spends credits. |
+| X recent search (7d) | `x_api` `recent` | Exact operators, last 7 days, `public_metrics` | Grok synthesis; posts older than 7d | `X_BEARER_TOKEN`. ~$0.005/post. Default 10, max 100/page. Pass `next_token` yourself. |
+| X full-archive search | `x_api` `archive` | Same operators, 2006+ | Grok synthesis; unentitled archive | Same per-post cost. Query max 1024 chars. Needs archive entitlement. |
 
 ### Fetch / extract / traverse
 
@@ -52,6 +53,11 @@ Invoke: `read xd://<name>` for schema, then `write` JSON to the same path. Never
 | LLM extract from known URL globs | `firecrawl_crawl` `extract` | `example.com/*` + prompt/schema | Unknown URLs (use agent) | Token/credit based; wait+cancel on timeout |
 | Autonomous gather (URLs unknown) | `firecrawl_crawl` `agent` | “Find X wherever it lives” | One known URL (use scrape JSON) | Dynamic. Plan **must** name `max_credits` (default 100, hard max 2500). |
 | Interact with a prior scrape | `firecrawl_crawl` `interact` | Click/fill on a **public** scrape session | Behind-login (use `browser`) | Session-minute credits; keep `interact_timeout` tight |
+| Canonical X post(s) | `x_api` `lookup` | Ids or status URLs → text + `public_metrics` | Discovery | ~$0.005/post. Max 100 ids. |
+| X reply thread | `x_api` `thread` | `conversation_id` / status URL reply tree | Threads older than 7d without `archive` | Recent search under the hood. Same per-post cost. |
+| X user profile | `x_api` `user` | Handle → followers, verified, description | Posts | ~$0.010/user. |
+| X user timeline | `x_api` `timeline` | Up to 3200 recent posts; `exclude` retweets/replies | Full archive of a user | ~$0.005/post. Default 10/page. |
+| X volume counts | `x_api` `counts` | Bucketed hit counts, not posts | Post text | `window=recent` ~$0.005/req; `all` ~$0.010/req. `granularity` minute/hour/day. |
 | Multi-hop research report | `parallel_search` `task` | Synthesized report with processor tiers | First-pass lookup | lite $0.005 · base $0.01 · core $0.025 · pro $0.10 · ultra $0.30 · ultra8x up to $2.40. **Cannot cancel.** Never start above `base` without a stated budget. |
 
 ## Keyless primary APIs (`read`)
@@ -73,8 +79,8 @@ Recipes: `skill://deep-research/references/free-apis.md`.
 
 ## Construction rules
 
-1. List every capability that **could** answer the question, then choose. Do not default to `web_search` or Tavily because they are listed first.
-2. Prefer $0 primary sources when they are the actual corpus (arXiv for preprints, OpenAlex for citations, `github_search` for repo discovery, developer index for issues/PRs/docs).
-3. One known URL → `read` / Jina / scrape JSON. Unknown URLs → search or Firecrawl agent (with ceiling). Site shape unknown → `map` before `crawl`.
+1. The tables above are the map. List every row that **could** answer, then choose. Do not default to `web_search` or Tavily because they are listed first. Do not skip `x_api` / `x_search` because they are social.
+2. Corpus is a fact in the row (`Best for` / `Not for`), not a separate ladder.
+3. One known URL → `read` / Jina / scrape JSON / `x_api` `lookup`. Unknown URLs → search or Firecrawl agent (with ceiling). Site shape unknown → `map` before `crawl`.
 4. Behind-login → `browser`. Firecrawl has no cookies.
-5. Parallel `pro`+ and Firecrawl `agent` / large crawls need an explicit budget in the plan.
+5. Name ceilings from the row: Firecrawl `limit` / `max_credits`, Parallel processor, `x_api` `max_results`. Parallel `pro`+ and Firecrawl `agent` / large crawls need an explicit budget.

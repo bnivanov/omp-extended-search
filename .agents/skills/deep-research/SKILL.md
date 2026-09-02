@@ -59,17 +59,16 @@ Do not bury Chosen / Rejected / Cost / options in thinking.
 
 ## §1. How to pick (not a priority list)
 
-Catalog: `skill://deep-research/references/capability-catalog.md`  
-Domain candidates: `skill://deep-research/references/routing-table.md`  
+The map: `skill://deep-research/references/capability-catalog.md`  
+Domain candidates (options, not first-choice): `skill://deep-research/references/routing-table.md`  
 Keyless recipes: `skill://deep-research/references/free-apis.md`
 
-- Match **corpus**, not habit. Preprints → arXiv/OpenAlex; repo discovery → `github_search`; issues/PRs/docs passages → Firecrawl `developer`; X topic synthesis → `x_search`; X operators/metrics/threads → `x_api`; launches → Product Hunt (topic+date only).
-- One known URL → `read` / Jina / Firecrawl scrape JSON. Unknown URLs → search or Firecrawl `agent` with `max_credits`. Unknown site shape → `map` before `crawl`.
-- Behind-login → `browser`. Firecrawl has no cookies.
-- Parallel `pro`+ and Firecrawl agent / crawls >20 pages need an explicit budget in Chosen.
+- Open the catalog. Every row is in play, including `x_search` and every `x_api` operation. The model picks the mix.
+- `Best for` / `Not for` / cost on the row are facts. Do not invent a separate ladder.
 - Rejected must include near-misses the user would otherwise ask about.
+- Name ceilings from the chosen rows (Firecrawl `limit` / `max_credits`, Parallel processor, `x_api` `max_results`). Parallel `pro`+ and Firecrawl agent / crawls >20 pages need an explicit budget in Chosen.
 
-Ceilings (guidance): standard look-up keep total ≲ $0.05 / a few credits; light deep ≲ $0.10; heavy $0.10–$2.40 only with named budget. Say “guidance, not a quote”. No per-call spend guard exists.
+Say “guidance, not a quote”. No per-call spend guard exists.
 
 After the user picks an option, run only that mix via `write` to `xd://<tool>` (or native `web_search` / `read` / `browser` as planned). Wrong prefix `xdi://` creates a file and does not run. If results leave a gap, write a **new** plan before spending more.
 
