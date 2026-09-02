@@ -113,5 +113,5 @@ Billed POSTs (`search` / `extract`) retry with bounded exponential jitter and ho
 ## What it's not
 
 - Not a pure semantic "pages like this embedding" store (Exa `neural`/`deep` shines there)
-- Not X-native (use `x_search`)
+- Not X-native (use `x_search` for Grok synthesis, `x_api` for operators/metrics)
 - Not related to omp's native Parallel path, which only ever sends beta `fast` with a single query

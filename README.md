@@ -13,6 +13,7 @@ Install only the ones you want.
 | GitHub | `tools/github_search.ts` | Repository search by keyword, creation window, stars, language, topic — the proxy for "trending" (which has no API). | none needed; `GITHUB_TOKEN` or `gh auth` raises the rate limit |
 | Product Hunt | `tools/producthunt_search.ts` | Recent/top launches by topic and date (the v2 API has no keyword search — it lists, it doesn't grep). | `PRODUCTHUNT_API_TOKEN` (Developer Token from the free app page — not the API Key) |
 | X Search | `tools/x_search.ts` | Searches public posts on X (Twitter) via xAI's native search. Keyword, semantic, user, and thread search; can optionally resolve each cited post to its real text and engagement numbers. | `/login` → xAI Grok (SuperGrok or X Premium+), or `XAI_API_KEY` |
+| X API | `tools/x_api.ts` | Read-only X API v2: recent/archive search, lookup, threads, user, timeline, counts. Exact operators and `public_metrics`. | `X_BEARER_TOKEN` or `TWITTER_BEARER_TOKEN` (not `XAI_API_KEY`) |
 | Exa Search | `tools/exa_search.ts` | Full Exa API: search types (`auto` / `fast` / `neural` / `deep`), vertical categories (papers, people, companies, github), domain/date filters, answer-with-citations, URL contents fetch. omp's native Exa path only ever uses `auto` + summary. | `/login` → Exa, or `EXA_API_KEY` |
 | Firecrawl Search | `tools/firecrawl_search.ts` | Direct Firecrawl Search v2 plus Research/Developer indexes: web/news/images sources, GitHub/research/PDF categories, papers/paper/related/developer operations, domain/date/location filters, highlights, optional page scraping. omp 17.0.9+ can use Firecrawl behind ordinary `web_search` when Firecrawl is explicitly selected in `providers.webSearchOrder`; this extension is the advanced/direct lane. | Credential order: omp session/provider Firecrawl credential first; `FIRECRAWL_API_KEY` second; keyless access last (limited). Either credential provides higher limits. |
 | Firecrawl Crawl | `tools/firecrawl_crawl.ts` | Site traversal and extraction: `map`, `scrape` (incl. JSON mode), `crawl`, `batch`, `extract`, `agent`, `interact`, plus status/cancel. The only crawl/extract primitive in the fleet. Reaches **public pages only**: Firecrawl sends no cookies or session, so anything behind a login needs the `xd://browser` device. Bills per scraped page; agent bills dynamically (`max_credits`). | Same credential order as Firecrawl Search |
@@ -111,6 +112,9 @@ write xd://reddit_search
 write xd://x_search
 {"query":"omp agent","focus":"relevance","recency":"week","limit":10}
 
+write xd://x_api
+{"operation":"recent","query":"from:xai lang:en -is:retweet","max_results":10}
+
 write xd://firecrawl_search
 {"query":"agent memory","sources":["news"],"recency":"week","limit":5}
 ```
@@ -156,7 +160,7 @@ The catalog the model plans from is [docs/capability-catalog.md](docs/capability
 
 ## Known limitations
 
-These come from a source-verified audit of all eleven tools ([docs/capability-matrix.md](docs/capability-matrix.md)),
+These come from a source-verified audit of the fleet ([docs/capability-matrix.md](docs/capability-matrix.md)),
 re-checked adversarially. Claims here are about what the code does, not what the upstream APIs advertise.
 
 ### Resolved
@@ -185,8 +189,8 @@ re-checked adversarially. Claims here are about what the code does, not what the
 |---|---|
 | No authenticated crawling | Firecrawl sends no cookies or session. Anything behind a login needs the `xd://browser` device, driven per-investigation. No tool here can reach it. Worked example: [examples/authenticated-ux-crawl](examples/authenticated-ux-crawl) — 22 screens of a logged-in app, reviewed by parallel agents. |
 | Parallel task runs cannot be cancelled | Verified against the live API: `DELETE /v1/tasks/runs/{id}` → 405, and `POST …/cancel` returns the generic router 404, not Parallel's structured error body. There is no cancel endpoint. A timed-out run keeps executing and billing; the tool now surfaces `details.orphanedRun` with the run id and an `operation: "task_status"` to retrieve it later. |
-| No per-call spend guard | Exa `deep`, Parallel processors, and `firecrawl_crawl` can each run up cost. Cost is reported after the fact (`costDollars`, `creditsUsed`); nothing refuses a call for being too expensive. The plan-first gate is the current control. |
-| Exa / Parallel / X / Firecrawl search cannot paginate | Their APIs expose no page or cursor on these endpoints. These tools report truncation honestly rather than advertising a page you cannot request — raise the limit or narrow the query. |
+| No per-call spend guard | Exa `deep`, Parallel processors, `firecrawl_crawl`, and `x_api` can each run up cost. `x_api` reports `details.response.cost.guidance_usd` after the fact; nothing refuses a call for being too expensive. The plan-first gate is the current control. |
+| Exa / Parallel / xAI `x_search` / Firecrawl search cannot paginate | Those APIs expose no page or cursor on these endpoints. `x_api` **does** paginate via `next_token` (opt-in; never auto-walked). |
 | GitHub search caps at 1000 results | An upstream ceiling, not ours. The tool now rejects a page beyond it instead of returning a 422. |
 | No geospatial search | Exa, Firecrawl, and Parallel accept a free-form location string as a ranking bias only — no coordinates, radius, or place details. |
 | No Stack Exchange / Discourse adapter | `feed_search` reads their public RSS best-effort; there is no API adapter and no thread/comment corpus search. |
@@ -203,6 +207,7 @@ re-checked adversarially. Claims here are about what the code does, not what the
 - [docs/github.md](docs/github.md) — repo search qualifiers
 - [docs/producthunt.md](docs/producthunt.md) — token setup and parameters
 - [docs/x.md](docs/x.md) — x_search settings: focus, reasoning effort, date windows, handle filters, post capture
+- [docs/x-api.md](docs/x-api.md) — x_api X API v2 operations, operators, pagination, cost guidance
 - [docs/exa.md](docs/exa.md) — exa_search settings: types, contents packing, categories, filters, answer, contents
 - [docs/firecrawl.md](docs/firecrawl.md) — `firecrawl_search` SERP + papers/developer indexes; `firecrawl_crawl` map/scrape/crawl/batch/extract/agent/interact, page limits, and per-page cost
 - [docs/capability-catalog.md](docs/capability-catalog.md) — planning table: every native + extended + keyless capability, costs as **guidance**, chosen vs rejected
@@ -219,5 +224,6 @@ Install into omp with `./install.sh … --with-confirm-rule` (copies the skill a
 ## Notes
 
 - `x_search` used to live at [omp-x-search](https://github.com/bnivanov/omp-x-search). That repo is archived; this one is its home now.
+- `x_api` is a separate billed X API v2 lane (`X_BEARER_TOKEN`). It never reads `XAI_API_KEY`.
 - `firecrawl_search` resolves credentials in this order: omp session/provider Firecrawl credential, `FIRECRAWL_API_KEY`, then limited keyless access.
 - License: [MIT](./LICENSE)

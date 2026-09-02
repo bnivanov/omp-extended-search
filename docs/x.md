@@ -90,6 +90,6 @@ That installs [`.agents/skills/deep-research/SKILL.md`](../.agents/skills/deep-r
 ## What it can't do
 
 - Write actions (post/reply/DM/like), DMs, protected/private content
-- Exact views/bookmarks, streaming firehose, full archive — those need the paid X API ($200–$42,000/mo); this tool costs your existing xAI subscription or API key usage
+- Exact views/bookmarks, operator search, thread reconstruction, user timelines, volume counts, streaming firehose, full archive — use [`x_api`](x-api.md) (X API v2 bearer + credits)
 
-Best-in-class for reading and reasoning about public X. For writing or full historical archives, you need the paid X API.
+Best-in-class for reading and reasoning about public X via Grok. For exact metrics, operators, threads, and archives, use `xd://x_api`.

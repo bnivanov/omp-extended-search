@@ -63,7 +63,7 @@ Catalog: `skill://deep-research/references/capability-catalog.md`
 Domain candidates: `skill://deep-research/references/routing-table.md`  
 Keyless recipes: `skill://deep-research/references/free-apis.md`
 
-- Match **corpus**, not habit. Preprints → arXiv/OpenAlex; repo discovery → `github_search`; issues/PRs/docs passages → Firecrawl `developer`; X → `x_search`; launches → Product Hunt (topic+date only).
+- Match **corpus**, not habit. Preprints → arXiv/OpenAlex; repo discovery → `github_search`; issues/PRs/docs passages → Firecrawl `developer`; X topic synthesis → `x_search`; X operators/metrics/threads → `x_api`; launches → Product Hunt (topic+date only).
 - One known URL → `read` / Jina / Firecrawl scrape JSON. Unknown URLs → search or Firecrawl `agent` with `max_credits`. Unknown site shape → `map` before `crawl`.
 - Behind-login → `browser`. Firecrawl has no cookies.
 - Parallel `pro`+ and Firecrawl agent / crawls >20 pages need an explicit budget in Chosen.

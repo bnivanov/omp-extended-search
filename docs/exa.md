@@ -85,6 +85,6 @@ All three endpoints are billed POSTs. Transient failures retry with bounded expo
 
 ## What it's not
 
-- Not an X/Twitter search (use `x_search`)
+- Not an X/Twitter search (use `x_search` for Grok synthesis, `x_api` for operators/metrics)
 - Not a multi-minute research report (use `parallel_search` `operation=task`)
 - omp's `exa.enableResearcher` / `exa.enableWebsets` config toggles are unrelated — they currently register no tools

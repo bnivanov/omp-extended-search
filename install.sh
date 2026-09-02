@@ -22,7 +22,7 @@ SKILLS_DIR="${HOME}/.omp/agent/skills"
 CONFIG_YML="${HOME}/.omp/agent/config.yml"
 
 # Canonical short-name order. Keep firecrawl = firecrawl_search; firecrawl-crawl is separate.
-ALL_TOOLS=(x exa parallel tavily hackernews feed arxiv reddit github producthunt firecrawl firecrawl-crawl)
+ALL_TOOLS=(x x-api exa parallel tavily hackernews feed arxiv reddit github producthunt firecrawl firecrawl-crawl)
 
 WITH_CONFIRM_RULE=0
 WITH_APPROVAL_GATE=0
@@ -45,6 +45,7 @@ Usage:
 
 Tools (pick one or more):
   x               x_search.ts            — public posts on X (Twitter) via xAI
+  x-api           x_api.ts               — X API v2 recent/archive/lookup/thread/user/timeline/counts
   exa             exa_search.ts          — full Exa search/answer/contents
   parallel        parallel_search.ts     — full Parallel V1 search/extract/task
   hackernews      hackernews_search.ts   — Hacker News search + front-page feeds (no key)
@@ -71,6 +72,7 @@ EOF
 tool_file() {
   case "$1" in
     x) echo "x_search.ts" ;;
+    x-api) echo "x_api.ts" ;;
     exa) echo "exa_search.ts" ;;
     parallel) echo "parallel_search.ts" ;;
     tavily) echo "tavily_search.ts" ;;
@@ -93,6 +95,7 @@ tool_file() {
 name_for_file() {
   case "$1" in
     x_search.ts) echo "x" ;;
+    x_api.ts) echo "x-api" ;;
     exa_search.ts) echo "exa" ;;
     parallel_search.ts) echo "parallel" ;;
     tavily_search.ts) echo "tavily" ;;
@@ -453,7 +456,7 @@ print_epilogue() {
     echo "and waits. Not an alwaysApply rule; do not use the ask tool."
   fi
   echo
-  echo "Docs: docs/capability-catalog.md, docs/x.md, docs/exa.md, docs/parallel.md, docs/tavily.md, docs/hackernews.md, docs/feed.md,"
+  echo "Docs: docs/capability-catalog.md, docs/x.md, docs/x-api.md, docs/exa.md, docs/parallel.md, docs/tavily.md, docs/hackernews.md, docs/feed.md,"
   echo "      docs/arxiv.md, docs/reddit.md, docs/github.md, docs/producthunt.md, docs/firecrawl.md"
 }
 
@@ -513,7 +516,7 @@ while [[ "$#" -gt 0 ]]; do
         SELECTED=("${ALL_TOOLS[@]}")
       fi
       ;;
-    x|exa|parallel|tavily|hackernews|feed|arxiv|reddit|github|producthunt|firecrawl|firecrawl-crawl)
+    x|x-api|exa|parallel|tavily|hackernews|feed|arxiv|reddit|github|producthunt|firecrawl|firecrawl-crawl)
       SELECTED+=("$arg")
       ;;
     *)

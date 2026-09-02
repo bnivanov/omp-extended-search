@@ -35,7 +35,8 @@ Invoke: `read xd://<name>` for schema, then `write` JSON to the same path. Never
 | arXiv preprints | `arxiv_search` | CS/AI primary preprints + PDF URLs | Paywalled publisher pages | $0. ~1 req / 3s polite. |
 | Product Hunt launches | `producthunt_search` | Launches by **topic + date** | Keyword search (API cannot grep) | Needs Developer Token. Lists, does not search. |
 | RSS / lab blogs | `feed_search` | Newsletters, Substack/Medium, `ai-labs` / `tech-news` bundles | Ad-hoc web discovery | $0 |
-| X / Twitter public posts | `x_search` | Live posts, handles, threads | Write/DM/protected; full archive | xAI login or `XAI_API_KEY`. `focus=relevance` default; volume is broader/noisier. Capture: syndication free; Firecrawl capture spends credits. |
+| X / Twitter public posts | `x_search` | Live posts, handles, topic synthesis | Write/DM/protected; exact metrics/archive | xAI login or `XAI_API_KEY`. `focus=relevance` default; volume is broader/noisier. Capture: syndication free; Firecrawl capture spends credits. |
+| X / Twitter operators + metrics | `x_api` | Exact query, `public_metrics`, threads, user/timeline, 7d or archive, counts | Grok synthesis; write/DM/stream | `X_BEARER_TOKEN`. ~$0.005/post read. Default 10; pass `next_token` yourself. |
 
 ### Fetch / extract / traverse
 

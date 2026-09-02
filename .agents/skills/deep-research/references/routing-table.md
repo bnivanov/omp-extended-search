@@ -18,7 +18,7 @@ Full knobs/costs: `capability-catalog.md`.
 | Library / API contract | Firecrawl `developer` docs; `read` known docs URL; Jina | Repo search |
 | HN community | `hackernews_search` | `web_search site:news.ycombinator.com` as first move |
 | Reddit practitioner chatter | `reddit_search` named subs | Global Reddit; Firecrawl of reddit.com |
-| X / Twitter | `x_search` | Tavily/Exa as X substitute |
+| X / Twitter | `x_search` (synthesis) or `x_api` (operators/metrics/threads) | Tavily/Exa as X substitute |
 | Product Hunt launches | `producthunt_search` topic + date | Keyword grep (API cannot) |
 | RSS / lab blogs | `feed_search` bundles or URL | Ad-hoc web crawl |
 | Macro / Fed | FRED | News synthesis as primary data |
