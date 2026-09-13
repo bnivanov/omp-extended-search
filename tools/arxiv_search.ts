@@ -464,9 +464,13 @@ const factory = (host) => {
 		label: "arXiv Paper Search",
 		approval: "read",
 		description:
-			"Search academic papers on arXiv (free, no API key) via the Atom query API. Filters: free-text query (all:\"…\"), categories (cs.LG, cs.AI, cs.CL, cs.MA, stat.ML, … — OR'd), author, sort=relevance|date, recency/since_days (submittedDate range), page (1-indexed). Returns title, abs + PDF links, authors, and a ~500-char abstract. arXiv asks for max ~1 request per 3s; this tool spaces requests in-process and retries transient failures up to 3 attempts per call. Use for ML/AI/CS/physics preprints and recent research.",
+			"Search academic papers on arXiv (free, no API key) via the Atom query API. Filters: free-text query (all:\"…\"), categories (cs.LG, cs.AI, cs.CL, cs.MA, stat.ML, … — OR'd), author, sort=relevance|date, recency/since_days (submittedDate range), page (1-indexed). operation=lookup: direct id_list fetch of known arXiv ids for cited-paper follow-ups. Returns title, abs + PDF links, authors, and a ~500-char abstract. arXiv asks for max ~1 request per 3s; this tool spaces requests in-process and retries transient failures up to 3 attempts per call. Use for ML/AI/CS/physics preprints and recent research.",
 		parameters: z.object({
-			query: z.string().describe('Free-text search; becomes all:"<text>" in the arXiv search_query.'),
+			operation: z.enum(["search", "lookup"]).optional().describe("search (default) | lookup (direct id_list fetch — skips the query pipeline)."),
+			id_list: z
+				.array(z.string())
+				.optional()
+				.describe("operation=lookup: arXiv ids to fetch directly (max 50), e.g. [\"2105.05233\", \"2005.14165\"]. Bare id, arXiv:…, or abs-URL forms accepted."),
 			categories: z
 				.array(z.string())
 				.optional()
@@ -502,6 +506,10 @@ const factory = (host) => {
 
 		formatApprovalDetails(args) {
 			const a = args || {};
+			if ((a.operation || "search") === "lookup") {
+				const ids = Array.isArray(a.id_list) ? a.id_list.length : 0;
+				return [`arXiv lookup  |  ids: ${ids}`];
+			}
 			const lines = [`Query: ${a.query ?? "(none)"}`];
 			const bits = [];
 			bits.push(`sort=${a.sort === "date" ? "date" : "relevance"}`);
@@ -517,6 +525,52 @@ const factory = (host) => {
 
 		async execute(_toolCallId, params, onUpdate, _ctx, signal) {
 			try {
+				const op = params.operation || "search";
+
+				if (op === "lookup") {
+					const rawIds = Array.isArray(params.id_list) ? params.id_list : [];
+					const ids = rawIds
+						.map((v) => String(v).trim())
+						.filter(Boolean)
+						.map((v) => {
+							const abs = v.match(/arxiv\.org\/(?:abs|pdf)\/([^\s?#]+)/i);
+							if (abs) return abs[1].replace(/\.pdf$/i, "");
+							return v.replace(/^arxiv:/i, "");
+						})
+						.slice(0, 50);
+					if (!ids.length) {
+						return { isError: true, content: [{ type: "text", text: "Error: operation=lookup requires id_list (max 50 arXiv ids)." }] };
+					}
+					const maxResults = clampInt(params.max_results, ids.length, 1, MAX_RESULTS);
+					const qs = new URLSearchParams();
+					qs.set("id_list", ids.join(","));
+					qs.set("start", "0");
+					qs.set("max_results", String(Math.max(maxResults, ids.length)));
+					const url = `${ARXIV_API}?${qs.toString()}`;
+					const xml = await fetchText(url, signal, FETCH_TIMEOUT_MS, onUpdate);
+					const parsed = parseFeed(xml);
+					const pagination = {
+						page: 1,
+						per_page: ids.length,
+						returned: parsed.entries.length,
+						has_more: false,
+						continuation_supported: false,
+					};
+					return {
+						content: [{ type: "text", text: formatResults(parsed, pagination) }],
+						details: {
+							response: {
+								provider: "arxiv",
+								operation: "lookup",
+								id_list: ids,
+								count: parsed.entries.length,
+								entries: parsed.entries,
+							},
+							pagination,
+						},
+					};
+				}
+
 				const q = typeof params.query === "string" ? params.query.trim() : "";
 				const cats = Array.isArray(params.categories)
 					? params.categories.map((c) => String(c).trim()).filter(Boolean)

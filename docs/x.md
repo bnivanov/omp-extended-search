@@ -18,8 +18,8 @@ The model fills these; you rarely set them by hand.
 | Parameter | Type | Notes |
 |---|---|---|
 | `query` | string *(required)* | What to search for. |
-| `model` | string | xAI model. Default `grok-4.3`. |
-| `reasoning_effort` | `low` \| `medium` \| `high` | Depth vs latency. Default `high`. |
+| `model` | string | xAI model. Default `grok-4.3`; `grok-4.6` is the newer flagship (~1.6× input / 2.4× output cost per 1M tokens). |
+| `reasoning_effort` | `low` \| `medium` \| `high` \| `xhigh` | Depth vs latency. Default `high`. `xhigh` requires grok-4.6+ and degrades to `high` on older models. |
 | `focus` | `relevance` \| `volume` | `relevance` (default) favors the best posts; `volume` broadens coverage across handles/viewpoints. |
 | `recency` | `day` \| `week` \| `month` \| `year` | Convenience window; maps to `from_date`. |
 | `limit` | number | Max citations returned. Default `10`. Schema-constrained to **1–30** (the real maximum) — values above 30 are rejected by the schema rather than silently capped. |
@@ -58,22 +58,38 @@ There is no page/cursor parameter (`continuation_supported: false`). `limit` cap
 ## Model & effort guidance
 
 Live benchmarking (July 2026, same prompt across combinations) landed on:
-
 - `grok-4.3` / `high` — the default. Deepest historical reach, best value.
 - `grok-4.3` / `low` or `medium` — quick pulse checks, cheaper.
+- `grok-4.6` — the Aug-2026 flagship ("most intelligent and fastest", 500k context) at $2.00 in / $0.50 cached / $6.00 out per 1M tokens vs grok-4.3's $1.25 / $0.20 / $2.50 (~1.6×/2.4×). Not yet re-benchmarked against grok-4.3 — opt in when quality justifies the premium; `xhigh` effort is grok-4.6+ only.
 - `grok-4.5` / `low` — premium, well-written synthesis at roughly 4–5× the tokens and ~2× the latency.
 - `grok-4.5` / `medium` — skip; it regressed (fewest sources, shallowest window) in testing.
 
-xAI reasoning effort is `low`/`medium`/`high` only and cannot be disabled; there is no server-side `auto`. Numbers shift as xAI changes models — treat this as a starting point, not gospel.
+xAI reasoning effort is `low`/`medium`/`high`/`xhigh` (xhigh on grok-4.6+; older models degrade it to `high`) and cannot be disabled; there is no server-side `auto`. Numbers shift as xAI changes models — treat this as a starting point, not gospel.
+
+## Cost (billing change 2026-09-21)
+
+**Effective 2026-09-21 12:00 PT**, xAI replaces the $5-per-1k-calls X Search billing with **per-resource billing**:
+
+| Resource | Price |
+|---|---|
+| Posts fetched | **$5 per 1,000 posts** |
+| User profiles fetched | **$10 per 1,000 profiles** |
+
+**Parent and quoted posts count** toward the post total — a thread-heavy or quote-dense result set bills more than the citation count suggests. Profile fetches trigger on handle expansion (`allowed_handles`/`excluded_handles` matching still costs profile reads for candidates).
+
+What this means per search: `reasoning_effort: "high"` + `focus: "volume"` + `limit: 30` can plausibly fetch hundreds of posts + dozens of profiles in one call — roughly **10× the old per-call assumption**. Before 2026-09-21 the per-call rate ($5/1k calls) applies. After, budget accordingly:
+
+- Prefer `limit: 10` (default) unless the pipeline genuinely needs 30.
+- Use `focus: "relevance"` (default) for pointed questions; reserve `volume` for coverage passes that justify the post count.
+- Narrow with `recency`/`from_date`/`to_date` and handle filters — smaller pools mean fewer fetched resources.
+- The tool's `reasoning_effort` dial controls *Grok's* token spend, not the search-resource billing; both lines appear on the same invoice.
 
 ## Defaults & configuration
 
 Set env vars before launching omp to change defaults globally:
 
 - `OMP_XSEARCH_MODEL` — default model (`grok-4.3`)
-- `OMP_XSEARCH_EFFORT` — default effort, `low` | `medium` | `high` (`high`)
-
-Per call, the driver model may pass `model` or `reasoning_effort` directly.
+- `OMP_XSEARCH_EFFORT` — default effort, `low` | `medium` | `high` | `xhigh` (`high`)
 
 ## Confirm settings before each search (optional)
 

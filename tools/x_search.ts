@@ -10,15 +10,17 @@
  * Auth precedence: xai-oauth (SuperGrok / X Premium+) -> xai / XAI_API_KEY.
  *
  * Model defaults to grok-4.3 (fast, strong X-search model with cleanly
- * effort-scaling reasoning). Reasoning effort defaults to "high"; the only
- * levels are low/medium/high and there is no server-side "auto". Override per
- * call via the `model` / `reasoning_effort` params, or globally via the
- * `OMP_XSEARCH_MODEL` / `OMP_XSEARCH_EFFORT` env vars.
+ * effort-scaling reasoning; grok-4.6 is the newer flagship — opt in via the
+ * `model` param when cost/quality warrants). Reasoning effort defaults to
+ * "high"; levels are low/medium/high/xhigh (xhigh is grok-4.6+ only and
+ * degrades to `high` on older models). There is no server-side "auto".
+ * Override per call via the `model` / `reasoning_effort` params, or globally
+ * via the `OMP_XSEARCH_MODEL` / `OMP_XSEARCH_EFFORT` env vars.
  */
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const XAI_MODEL = process.env.OMP_XSEARCH_MODEL || "grok-4.3";
-const VALID_EFFORTS = new Set(["low", "medium", "high"]);
+const VALID_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const ENV_EFFORT = (process.env.OMP_XSEARCH_EFFORT || "").toLowerCase();
 const DEFAULT_EFFORT = VALID_EFFORTS.has(ENV_EFFORT) ? ENV_EFFORT : "high";
 const DEFAULT_NUM_RESULTS = 10;
@@ -401,9 +403,8 @@ async function captureSources(sources, provider, signal) {
 export default function xSearchToolFactory(api) {
 	const z = api.zod || api.z;
 	const parameters = z.object({
-		query: z.string().describe("Search query for public posts on X (Twitter)."),
-		model: z.string().optional().describe("Model name (default grok-4.3)."),
-		reasoning_effort: z.enum(["low", "medium", "high"]).optional().describe("Reasoning effort (default high)."),
+		model: z.string().optional().describe("Model name (default grok-4.3; grok-4.6 is the newer flagship — ~1.6× input / 2.4× output cost)."),
+		reasoning_effort: z.enum(["low", "medium", "high", "xhigh"]).optional().describe("Reasoning effort (default high; xhigh is grok-4.6+ only, degrades to high on older models)."),
 		focus: z.enum(["relevance", "volume"]).optional().describe("relevance (default) or volume."),
 		recency: z.enum(["day", "week", "month", "year"]).optional().describe("Time filter window."),
 		limit: z.number().int().min(1).max(30).optional().describe("Max posts to return (1-30, default 10)."),
@@ -422,7 +423,7 @@ export default function xSearchToolFactory(api) {
 		label: "X Search",
 		approval: "read",
 		description:
-			"Search public posts on X (Twitter) via xAI native x_search. Use for X/Twitter posts, accounts, threads, and public discourse (not general web pages — use web_search for those). Include X permalinks for cited posts. allowed_handles and excluded_handles are mutually exclusive. reasoning_effort (low|medium|high, default high) trades latency for depth. focus='volume' broadens coverage, focus='relevance' (default) favors the best posts. capture=true resolves each cited permalink to its real post text + engagement (free syndication; capture_provider='firecrawl' adds retweets + top replies but spends Firecrawl credits).",
+			"Search public posts on X (Twitter) via xAI native x_search. Use for X/Twitter posts, accounts, threads, and public discourse (not general web pages — use web_search for those). Include X permalinks for cited posts. allowed_handles and excluded_handles are mutually exclusive. reasoning_effort (low|medium|high|xhigh, default high) trades latency for depth. focus='volume' broadens coverage, focus='relevance' (default) favors the best posts. Billing (from 2026-09-21): $5/1k posts fetched + $10/1k profiles — parent+quoted posts count, so high effort + volume + large limit multiplies cost. capture=true resolves each cited permalink to its real post text + engagement (free syndication; capture_provider='firecrawl' adds retweets + top replies but spends Firecrawl credits).",
 		parameters,
 		formatApprovalDetails(args) {
 			const a = args || {};

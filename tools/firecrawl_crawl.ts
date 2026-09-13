@@ -27,7 +27,8 @@ const BATCH_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const EXTRACT_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const AGENT_TERMINAL = new Set(["completed", "failed"]);
 const DEFAULT_AGENT_MAX_CREDITS = 100;
-const HARD_MAX_AGENT_CREDITS = 2500;
+const DEFAULT_AGENT_CREDITS_UPSTREAM = 2500; // upstream default; upstream ACCEPTS higher values (billed as paid requests)
+const MAX_AGENT_CREDITS_INPUT = 100000; // tool-side sanity ceiling — upstream has no documented max
 const HARD_MAX_BATCH_URLS = 100;
 
 function asString(value) {
@@ -199,6 +200,17 @@ function buildScrapeBody(params) {
 	if (includeTags) body.includeTags = includeTags;
 	if (excludeTags) body.excludeTags = excludeTags;
 	if (Array.isArray(params.actions) && params.actions.length) body.actions = params.actions;
+	// scrape profile: persistent browser state (sign-in-once flows; free)
+	if (asString(params.profile_name)) {
+		body.profile = { name: params.profile_name.trim(), saveChanges: params.profile_save_changes === true };
+	}
+	// parsers: PDF engine choice (fast/ocr) + page cap (upstream max 10000)
+	if (asString(params.parser) || params.parser_max_pages != null) {
+		const parser = {};
+		if (asString(params.parser)) parser.pdf = params.parser.trim();
+		if (params.parser_max_pages != null) parser.maxPages = clampInt(params.parser_max_pages, 1, 10000, 100);
+		body.parsers = parser;
+	}
 	const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
 	return { body, formats, timeoutMs };
 }
@@ -221,6 +233,7 @@ function buildCrawlBody(params) {
 		onlyMainContent: asBoolean(scrape.only_main_content, true),
 	};
 	body.scrapeOptions = scrapeOptions;
+	if (asString(params.sitemap)) body.sitemap = params.sitemap.trim();
 
 	const wait = asBoolean(params.wait, true);
 	const pollTimeoutMs = clampInt(params.poll_timeout_ms, 1000, 3_600_000, DEFAULT_POLL_TIMEOUT_MS);
@@ -261,7 +274,7 @@ function buildExtractBody(params) {
 }
 
 function buildAgentBody(params) {
-	const maxCredits = clampInt(params.max_credits, 1, HARD_MAX_AGENT_CREDITS, DEFAULT_AGENT_MAX_CREDITS);
+	const maxCredits = clampInt(params.max_credits, 1, MAX_AGENT_CREDITS_INPUT, DEFAULT_AGENT_MAX_CREDITS);
 	const body = {
 		prompt: params.prompt,
 		maxCredits,
@@ -980,6 +993,27 @@ const factory = (host: CustomToolFactoryHost) => {
 				.describe("Scrape request timeout in milliseconds (1000–300000, default 60000)."),
 			include_tags: z.array(z.string().trim().min(1)).optional().describe("Scrape: HTML tags to include."),
 			exclude_tags: z.array(z.string().trim().min(1)).optional().describe("Scrape: HTML tags to exclude."),
+			profile_name: z
+				.string()
+				.trim()
+				.min(1)
+				.optional()
+				.describe("Scrape: named browser profile for persistent state (sign-in-once flows; free)."),
+			profile_save_changes: z
+				.boolean()
+				.optional()
+				.describe("Scrape: persist post-scrape profile changes (cookies/localStorage) back to the named profile."),
+			parser: z
+				.enum(["fast", "ocr"])
+				.optional()
+				.describe("Scrape: PDF parser engine — fast (default) or ocr for scanned documents."),
+			parser_max_pages: z
+				.number()
+				.int()
+				.min(1)
+				.max(10000)
+				.optional()
+				.describe("Scrape: max PDF pages to parse (upstream max 10000 — controls PDF cost)."),
 			// crawl
 			max_discovery_depth: z
 				.number()
@@ -1041,9 +1075,9 @@ const factory = (host: CustomToolFactoryHost) => {
 			max_credits: z
 				.number()
 				.min(1)
-				.max(HARD_MAX_AGENT_CREDITS)
+				.max(MAX_AGENT_CREDITS_INPUT)
 				.optional()
-				.describe(`agent: credit ceiling (default ${DEFAULT_AGENT_MAX_CREDITS}, hard max ${HARD_MAX_AGENT_CREDITS}).`),
+				.describe(`agent: credit ceiling (default ${DEFAULT_AGENT_MAX_CREDITS}; upstream default ${DEFAULT_AGENT_CREDITS_UPSTREAM} and higher values are accepted upstream — billed as paid requests).`),
 			effort: z.enum(["low", "medium", "high"]).optional().describe("agent: spark-2 reasoning budget."),
 			strict_constrain_to_urls: z.boolean().optional().describe("agent: only visit provided urls."),
 			scrape_id: z.string().trim().min(1).optional().describe("interact/interact_stop: scrape job id from a prior scrape."),
@@ -1133,7 +1167,7 @@ const factory = (host: CustomToolFactoryHost) => {
 			"Behind-login traversal needs the xd://browser device. Public JS pages can scrape then interact.",
 			"Prefer scrape JSON mode for one known URL; agent when URLs are unknown; extract only when you already have URL globs.",
 			"Crawling and batch scraping bill per page — set limit/urls carefully (crawl default 20, hard max 500; batch max 100 URLs).",
-			"Agent bills dynamically (default max_credits 100, hard max 2500). Waiting jobs DELETE-cancel on timeout/abort.",
+			"Agent bills dynamically (default max_credits 100; upstream default 2500 and higher accepted). Waiting jobs DELETE-cancel on timeout/abort.",
 			"Supports limited keyless mode; native Firecrawl provider credentials or FIRECRAWL_API_KEY enable authenticated requests.",
 		].join(" "),
 		parameters,
@@ -1176,10 +1210,9 @@ const factory = (host: CustomToolFactoryHost) => {
 				lines.push(`Wait: ${asBoolean(params.wait, true)}`);
 				lines.push("Cost: extract is token-based; prefer agent for unknown URLs.");
 			} else if (op === "agent") {
-				const credits = clampInt(params.max_credits, 1, HARD_MAX_AGENT_CREDITS, DEFAULT_AGENT_MAX_CREDITS);
+				const credits = clampInt(params.max_credits, 1, MAX_AGENT_CREDITS_INPUT, DEFAULT_AGENT_MAX_CREDITS);
 				if (params.effort) lines.push(`Effort: ${params.effort}`);
-				lines.push(`Wait: ${asBoolean(params.wait, true)}`);
-				lines.push(`Cost: agent credit ceiling ${credits} (hard max ${HARD_MAX_AGENT_CREDITS}).`);
+				lines.push(`Cost: agent credit ceiling ${credits} (default ${DEFAULT_AGENT_MAX_CREDITS}).`);
 			} else if (op === "interact") {
 				lines.push(params.code ? "Mode: code" : "Mode: prompt");
 				lines.push(`Interact timeout: ${params.interact_timeout ?? 30}s`);

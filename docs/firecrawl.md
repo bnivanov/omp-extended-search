@@ -141,7 +141,7 @@ The last request allows up to five results **from each source** and asks Firecra
 
 ## Research and Developer indexes
 
-These are **not** the SERP `categories: ["research"]` website filter. They hit Firecrawl's paper and developer indexes.
+These are **not** the SERP `categories: ["research"]` website filter. They hit Firecrawl's paper and developer indexes. **Correction (2026-09-13): the research/papers index is now FREE** — it expanded to ~43M biomedical-heavy abstracts and accepts `pmid:`/`pmcid:`/`doi:` identifiers; searching it does not burn search credits.
 
 | `operation` | Endpoint | Required |
 |---|---|---|
@@ -259,13 +259,13 @@ Start a managed multi-page crawl. Default `wait: true` polls until the job is te
 | Input | Default | Meaning / payload |
 |---|---|---|
 | `url` | required | Crawl start URL. |
-| `limit` | **20** | Max pages to crawl; hard max **500** (validation rejects higher). |
+| `limit` | **20** | Max pages to crawl; hard max **500** — **our tool-side clamp, not upstream's** (upstream default is 10,000 with a pre-flight credit check). Validation rejects higher values. |
 | `max_discovery_depth` | omitted | Max discovery depth from the start URL; sent as `maxDiscoveryDepth`. |
 | `include_paths` | omitted | Pathname regex patterns to include; sent as `includePaths`. |
 | `exclude_paths` | omitted | Pathname regex patterns to exclude; sent as `excludePaths`. |
 | `allow_external_links` | omitted (false upstream) | Follow external links; sent as `allowExternalLinks`. |
 | `crawl_entire_domain` | omitted (false upstream) | Follow sibling/parent internal links, not only children; sent as `crawlEntireDomain`. |
-| `sitemap` | — | Not a crawl body field on this tool (map-only). |
+| `sitemap` | omitted | `skip` \| `include` \| `only` — sent on the crawl body too (fixed 2026-09-13; previously dropped). |
 | `scrape_options` | see below | Per-page scrape options object. |
 | `scrape_options.formats` | `["markdown"]` | Formats for each crawled page. |
 | `scrape_options.only_main_content` | `true` | Main-content-only scrapes inside the crawl. |
@@ -371,7 +371,7 @@ Autonomous gather when URLs are **unknown**. Prompt is required. URLs, if suppli
 | `prompt` | required | What to gather. |
 | `schema` | omitted | Structured output schema. |
 | `urls` | omitted | Optional focus URLs. |
-| `max_credits` | **100** | Credit ceiling; hard max **2500**. |
+| `max_credits` | **100** | Credit ceiling. **Relaxed 2026-09-13:** upstream *defaults* to 2500 and **accepts higher** (billed as paid requests); the tool no longer rejects values above 2500. |
 | `effort` | omitted | `low` / `medium` / `high` (spark-2). |
 | `strict_constrain_to_urls` | omitted | Only visit provided URLs. |
 | `wait` / `poll_timeout_ms` | `true` / 300000 | Same as crawl. |
@@ -408,10 +408,14 @@ Status-specific details:
 - **`scrape`, `batch`, and `crawl` bill per page.** Treat every crawled/scraped URL as a chargeable unit.
 - **Rule of thumb:** `crawl` cost scales with the page `limit` (default 20, hard max 500). Batch scales with `urls.length` (max 100). Approval text surfaces `Cost: Firecrawl bills per scraped page — up to N pages this call.`
 - **`map` is the cheap way to see a site's shape first** — discover URLs and decide what to scrape/crawl before spending per-page credits.
-- **Extractor pick:** scrape JSON mode (one known URL) is cheapest; extract is for known URL globs; agent bills dynamically (default ceiling 100 credits, hard max 2500).
-- **Interact** bills the live session; keep `interact_timeout` tight.
+- **Extractor pick:** scrape JSON mode (one known URL) is cheapest; extract is for known URL globs; agent bills dynamically (default ceiling 100 credits; upstream default 2500, higher accepted).
+- **Interact bills 2–7 credits per browser-minute (1-minute minimum):** prompt-driven ~7/min, code-only ~2/min — keep `interact_timeout` tight; a 10-second session still bills a full minute.
 - Keyless mode remains limited; a stored credential or `FIRECRAWL_API_KEY` raises limits but does not make per-page work free.
 - Waiting jobs can run up to `poll_timeout_ms` (default 5 minutes) plus page-accumulation time; use `wait: false` when you want to start the job and poll later.
+
+## Dated risk: SERP research-category cutover (2026-11-16)
+
+From **2026-11-16**, `operation=search` + `categories:["research"]` switches from the web-filter response (`data.web`) to **Research Index paper records** (`data.research`, same shape as the papers op), with warnings on every affected response until cutover. Parse `data.research` or pin to `operation=papers` before that date.
 
 ## Invocation
 

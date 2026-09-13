@@ -556,6 +556,7 @@ function formatOutput(
 		query?: string;
 		since_days?: number;
 		sources: number;
+		global_truncated?: boolean;
 		pagination?: {
 			page?: number;
 			per_page: number;
@@ -564,6 +565,7 @@ function formatOutput(
 			continuation_supported?: boolean;
 			truncated?: boolean;
 			per_feed_truncated?: string[];
+			per_feed_candidates?: Record<string, number>;
 		};
 	},
 ): string {
@@ -590,7 +592,14 @@ function formatOutput(
 			continue;
 		}
 		if (fr.items.length === 0) {
-			out.push("(no matching items)");
+			// A feed that had matching candidates but lost them all to the global
+			// top-N cut is not a no-match — label the global-limit drop distinctly.
+			const candidates = meta.pagination?.per_feed_candidates?.[fr.url] ?? 0;
+			if (meta.global_truncated === true && candidates > 0) {
+				out.push(`(cut by limit=${meta.pagination?.per_page ?? 0})`);
+			} else {
+				out.push("(no matching items)");
+			}
 			out.push("");
 			continue;
 		}
@@ -778,6 +787,7 @@ const factory = (host) => {
 					query: queryStr || undefined,
 					since_days: sinceDays ?? undefined,
 					sources: sources.length,
+					global_truncated,
 					pagination,
 				});
 

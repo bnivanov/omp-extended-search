@@ -1,8 +1,8 @@
 /**
  * Runtime custom tool: parallel_search
  *
- * Drop-in Parallel web search for omp — full V1 Search modes (turbo/basic/advanced),
- * Extract, and Task/Deep Research processors.
+ * Drop-in Parallel web search for omp — full V1 Search modes (turbo/fast/basic/advanced),
+ * Extract (V1 advanced_settings shape), Responses API, and Task/Deep Research processors.
  *
  * Install:
  *   cp parallel_search.ts ~/.omp/agent/tools/
@@ -13,22 +13,22 @@
  *   2. PARALLEL_API_KEY
  *
  * Env knobs:
- *   OMP_PARALLEL_DEFAULT_MODE        turbo|basic|advanced  (default advanced)
- *   OMP_PARALLEL_DEFAULT_PROCESSOR   lite|base|core|pro|ultra|ultra2x|ultra4x|ultra8x (default base)
+ *   OMP_PARALLEL_DEFAULT_MODE        turbo|fast|basic|advanced  (default advanced)
+ *   OMP_PARALLEL_DEFAULT_PROCESSOR   lite|base|core|core2x|pro|ultra|ultra2x|ultra4x|ultra8x (default base)
  *   OMP_PARALLEL_MAX_POLL_MS         task poll budget ms   (default 180000)
  */
 
 const PARALLEL_API = "https://api.parallel.ai";
 const SEARCH_URL = `${PARALLEL_API}/v1/search`;
 const EXTRACT_URL = `${PARALLEL_API}/v1/extract`;
+const RESPONSES_URL = `${PARALLEL_API}/v1/responses`;
 const TASK_RUN_URL = `${PARALLEL_API}/v1/tasks/runs`;
 
-const VALID_MODES = new Set(["turbo", "basic", "advanced"]);
-// beta aliases map into V1
+const VALID_MODES = new Set(["turbo", "fast", "basic", "advanced"]);
+// legacy aliases map into V1 (beta fast/one-shot → V1 fast per the migration guide)
 const MODE_ALIASES = {
-	fast: "basic",
-	"one-shot": "basic",
-	"one-shot-new": "basic",
+	"one-shot": "fast",
+	"one-shot-new": "fast",
 	agentic: "advanced",
 	research: "advanced",
 	minimal: "turbo",
@@ -40,6 +40,7 @@ const VALID_PROCESSORS = new Set([
 	"lite",
 	"base",
 	"core",
+	"core2x",
 	"pro",
 	"ultra",
 	"ultra2x",
@@ -47,7 +48,7 @@ const VALID_PROCESSORS = new Set([
 	"ultra8x",
 ]);
 
-const VALID_OPS = new Set(["search", "extract", "task", "task_status"]);
+const VALID_OPS = new Set(["search", "extract", "task", "task_status", "responses"]);
 
 const ENV_MODE = (process.env.OMP_PARALLEL_DEFAULT_MODE || "advanced").toLowerCase();
 const DEFAULT_MODE = VALID_MODES.has(ENV_MODE) ? ENV_MODE : "advanced";
@@ -294,7 +295,6 @@ async function fetchJson(url, apiKey, { method = "POST", body, signal, timeoutMs
 					headers: {
 						"Content-Type": "application/json",
 						"x-api-key": apiKey,
-						"parallel-beta": "search-extract-2025-10-10",
 					},
 					body: body !== undefined ? JSON.stringify(body) : undefined,
 					signal: controller.signal,
@@ -360,14 +360,15 @@ async function fetchJson(url, apiKey, { method = "POST", body, signal, timeoutMs
 		if (signal) signal.removeEventListener("abort", onAbort);
 	}
 }
-
 function buildSourcePolicy(params) {
 	const include = asStringArray(params.include_domains);
 	const exclude = asStringArray(params.exclude_domains);
-	if (!include && !exclude) return undefined;
+	const afterDate = asString(params.after_date);
+	if (!include && !exclude && !afterDate) return undefined;
 	const policy = {};
 	if (include) policy.include_domains = include;
 	if (exclude) policy.exclude_domains = exclude;
+	if (afterDate) policy.after_date = afterDate;
 	return policy;
 }
 
@@ -400,20 +401,19 @@ function buildSearchBody(params) {
 	const sourcePolicy = buildSourcePolicy(params);
 	if (sourcePolicy) advanced.source_policy = sourcePolicy;
 	if (asString(params.location)) advanced.location = params.location.toLowerCase();
-
 	const maxResults = params.max_results ?? params.limit ?? params.num_results;
-	if (maxResults != null) advanced.max_results = clampInt(maxResults, 10, 1, 40);
+	if (maxResults != null) advanced.max_results = clampInt(maxResults, 10, 1, 20);
 
 	const excerptSettings = {};
 	if (params.max_chars_per_result != null) {
 		excerptSettings.max_chars_per_result = clampInt(params.max_chars_per_result, 10000, 200, 50000);
 	}
 	if (Object.keys(excerptSettings).length) advanced.excerpt_settings = excerptSettings;
-
 	if (params.live_fetch === true) {
-		advanced.fetch_policy = { max_age_seconds: 0 };
+		// fetch_policy.max_age_seconds has a 600s upstream minimum.
+		advanced.fetch_policy = { max_age_seconds: 600 };
 	} else if (params.max_age_seconds != null) {
-		advanced.fetch_policy = { max_age_seconds: clampInt(params.max_age_seconds, 86400, 0, 86400 * 365) };
+		advanced.fetch_policy = { max_age_seconds: clampInt(params.max_age_seconds, 86400, 600, 86400 * 365) };
 	}
 
 	if (Object.keys(advanced).length) body.advanced_settings = advanced;
@@ -447,6 +447,21 @@ function extractSearchSources(data) {
 		.filter(Boolean);
 }
 
+function formatBasisLines(data, cap = 12) {
+	if (!Array.isArray(data.basis) || !data.basis.length) return [];
+	const lines = [];
+	lines.push("");
+	lines.push("Per-element basis:");
+	for (const b of data.basis.slice(0, cap)) {
+		if (!b || typeof b !== "object" || !b.field) continue;
+		const basis = b.basis && typeof b.basis === "object" ? b.basis : {};
+		const confidence = basis.confidence != null ? ` confidence=${basis.confidence}` : "";
+		const reasoning = asString(basis.reasoning);
+		lines.push(`- ${b.field}${confidence}${reasoning ? ` — ${String(reasoning).slice(0, 200)}` : ""}`);
+	}
+	if (data.basis.length > cap) lines.push(`- … ${data.basis.length - cap} more basis entries`);
+	return lines;
+}
 function formatSearchForLLM(data, meta, pagination) {
 	const lines = [];
 	lines.push(`# Parallel search (mode=${meta.mode})`);
@@ -458,7 +473,9 @@ function formatSearchForLLM(data, meta, pagination) {
 		lines.push(`warnings: ${JSON.stringify(data.warnings)}`);
 	}
 	lines.push(`objective: ${meta.objective}`);
-	lines.push(`search_queries: ${JSON.stringify(meta.queries)}`);
+	lines.push(`search_queries: ${meta.queries ? JSON.stringify(meta.queries) : "(auto)"}`);
+	lines.push("");
+	lines.push(...formatBasisLines(data));
 	lines.push("");
 
 	const sources = extractSearchSources(data);
@@ -491,6 +508,7 @@ function formatExtractForLLM(data, pagination, opts = {}) {
 	if (Array.isArray(data.usage) && data.usage.length) {
 		lines.push(`usage: ${data.usage.map((u) => `${u.name || "sku"}×${u.count ?? 1}`).join(", ")}`);
 	}
+	lines.push(...formatBasisLines(data));
 	lines.push("");
 	const results = Array.isArray(data.results) ? data.results : [];
 	if (!results.length) lines.push("No extracted documents.");
@@ -536,6 +554,58 @@ function formatExtractForLLM(data, pagination, opts = {}) {
 	let text = lines.join("\n").trimEnd();
 	if (pagination) text = `${text}\n\n${formatPaginationLine(pagination)}`;
 	return text;
+}
+
+function formatResponsesForLLM(data) {
+	const lines = [];
+	lines.push("# Parallel responses");
+	if (data.id) lines.push(`responseId: ${data.id}`);
+	if (data.model) lines.push(`model: ${data.model}`);
+	if (data.status) lines.push(`status: ${data.status}`);
+	if (data.usage && typeof data.usage === "object") {
+		const u = data.usage;
+		const parts = [];
+		if (u.input_tokens != null) parts.push(`input=${u.input_tokens}`);
+		if (u.output_tokens != null) parts.push(`output=${u.output_tokens}`);
+		if (u.total_tokens != null) parts.push(`total=${u.total_tokens}`);
+		if (parts.length) lines.push(`usage: ${parts.join(", ")}`);
+	}
+	lines.push("");
+	const items = Array.isArray(data.output) ? data.output : [];
+	const texts = [];
+	const citations = [];
+	for (const item of items) {
+		if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+		for (const c of item.content) {
+			if (typeof c?.text === "string" && c.text.trim()) texts.push(c.text);
+			const annotations = Array.isArray(c?.annotations) ? c.annotations : [];
+			for (const a of annotations) {
+				const cite = a?.url_citation && typeof a.url_citation === "object" ? a.url_citation : a;
+				const url = asString(cite?.url);
+				if (url) citations.push({ title: asString(cite?.title) || url, url });
+			}
+		}
+	}
+	if (!texts.length) {
+		lines.push("(no output text)");
+	} else {
+		const body = texts.join("\n\n");
+		if (body.length > EXTRACT_BODY_CAP) {
+			lines.push(`${body.slice(0, EXTRACT_BODY_CAP)}… [truncated at ${EXTRACT_BODY_CAP} chars]`);
+		} else {
+			lines.push(body);
+		}
+	}
+	if (citations.length) {
+		lines.push("");
+		lines.push("## Citations");
+		citations.forEach((c, i) => lines.push(`${i + 1}. [${c.title}](${c.url})`));
+	}
+	lines.push(...formatBasisLines(data));
+	if (data.error) {
+		lines.push("", `error: ${typeof data.error === "string" ? data.error : JSON.stringify(data.error)}`);
+	}
+	return lines.join("\n");
 }
 
 function formatTaskForLLM(run, result) {
@@ -679,11 +749,12 @@ const factory = (host) => {
 		label: "Parallel Search",
 		approval: "read",
 		description: [
-			"Full Parallel web APIs with explicit mode control: Search (turbo/basic/advanced), Extract, and Task/Deep Research processors.",
-			"Use when the user asks to search with Parallel, expand web_search with Parallel, needs multi-query objective search with long excerpts, URL extraction, or deep research processors (lite→ultra8x).",
+			"Full Parallel web APIs with explicit mode control: Search (turbo/fast/basic/advanced), Extract (V1 shape), Responses API, and Task/Deep Research processors.",
+			"Use when the user asks to search with Parallel, expand web_search with Parallel, needs multi-query objective search with long excerpts, URL extraction, cited answers with a reasoning-effort dial, or deep research processors (lite→ultra8x).",
 			"Prefer over generic web_search when Parallel quality modes or task research matter.",
-			"operation=search (default): V1 Search. mode=turbo|basic|advanced (beta aliases fast/one-shot/agentic accepted).",
-			"operation=extract: pull excerpts/full content from known URLs.",
+			"operation=search (default): V1 Search. mode=turbo|fast|basic|advanced (legacy aliases one-shot/agentic/research accepted; one-shot maps to fast).",
+			"operation=extract: pull excerpts/full content from known URLs (V1 advanced_settings shape).",
+			"operation=responses: POST /v1/responses (model=parallel) — cited answer with reasoning.effort low|medium|high (low $10/1k, medium $50/1k default, high $250/1k — treat high as a budgeted tier).",
 			"operation=task: Deep Research / Task API with processor tiers (slower, more expensive, synthesizes an answer).",
 			"operation=task_status: retrieve an existing task run by run_id via GET /v1/tasks/runs/{run_id} (retryable, not billed as a new run); includes result when completed.",
 			"Task runs cannot be cancelled — the Parallel API has no cancel endpoint; a timed-out run keeps executing remotely. Use task_status to poll later.",
@@ -700,16 +771,16 @@ const factory = (host) => {
 				.optional()
 				.describe("Natural-language goal for Search/Extract/Task. Defaults to query."),
 			operation: z
-				.enum(["search", "extract", "task", "task_status"])
+				.enum(["search", "extract", "task", "task_status", "responses"])
 				.optional()
-				.describe("search=V1 Search (default); extract=URL extract; task=Deep Research processor run; task_status=GET existing run by run_id (not a new billed run)."),
+				.describe("search=V1 Search (default); extract=URL extract; responses=cited answer via /v1/responses; task=Deep Research processor run; task_status=GET existing run by run_id (not a new billed run)."),
 			mode: z
 				.enum([
 					"turbo",
+					"fast",
 					"basic",
 					"advanced",
 					// accepted aliases
-					"fast",
 					"one-shot",
 					"one-shot-new",
 					"agentic",
@@ -719,32 +790,33 @@ const factory = (host) => {
 					"minimal",
 				])
 				.optional()
-				.describe("Search mode. turbo=fastest/cheapest; basic=balanced; advanced=highest quality (default). Aliases: fast/one-shot→basic, agentic/research→advanced."),
+				.describe("Search mode. turbo=fastest/cheapest ($1/1k); fast=first-class V1 mode ($1/1k); basic=balanced ($5/1k); advanced=highest quality (default). Aliases: one-shot→fast, agentic/research→advanced."),
 			search_queries: z
 				.array(z.string())
 				.optional()
 				.describe("Keyword queries (3–6 words each). Prefer 2–3. Auto-filled from query when omitted."),
-			max_results: z.number().int().min(1).max(40).optional().describe("Max results (default 10)."),
-			limit: z.number().int().min(1).max(40).optional().describe("Alias of max_results."),
-			num_results: z.number().int().min(1).max(40).optional().describe("Alias of max_results."),
+			max_results: z.number().int().min(1).max(20).optional().describe("Max results (default 10; public modes cap at 20 upstream)."),
+			limit: z.number().int().min(1).max(20).optional().describe("Alias of max_results."),
+			num_results: z.number().int().min(1).max(20).optional().describe("Alias of max_results."),
 			max_chars_per_result: z.number().int().min(200).max(50000).optional(),
 			max_chars_total: z.number().int().min(500).max(500000).optional(),
 			include_domains: z.array(z.string()).optional(),
 			exclude_domains: z.array(z.string()).optional(),
-			location: z.string().optional().describe("ISO 3166-1 alpha-2 country code."),
-			live_fetch: z.boolean().optional().describe("Force live fetch (higher latency)."),
-			max_age_seconds: z.number().int().min(0).optional(),
+			location: z.string().optional().describe("ISO 3166-1 alpha-2 country code (37-code list; e.g. gb not uk)."),
+			live_fetch: z.boolean().optional().describe("Force live fetch (maps to the 600s upstream max_age_seconds minimum)."),
+			max_age_seconds: z.number().int().min(600).optional().describe("Freshness window in seconds (upstream minimum 600)."),
+			after_date: z.string().optional().describe("source_policy.after_date freshness filter (ISO date) — only sources published/updated after this date."),
 			session_id: z.string().optional().describe("Correlate search+extract across a larger workflow."),
 			client_model: z.string().optional(),
 			// extract
 			urls: z.array(z.string()).optional().describe("For operation=extract: up to 20 URLs."),
-			full_content: z.boolean().optional().describe("Extract: include full_content (default false)."),
-			excerpts: z.boolean().optional().describe("Extract: include excerpts (default true)."),
+			full_content: z.boolean().optional().describe("Extract: include full_content (default false; sent under advanced_settings per V1)."),
+			excerpts: z.boolean().optional().describe("Deprecated: excerpts can no longer be disabled in V1 extract; accepted for compatibility and ignored."),
 			// task
 			processor: z
-				.enum(["lite", "base", "core", "pro", "ultra", "ultra2x", "ultra4x", "ultra8x"])
+				.enum(["lite", "base", "core", "core2x", "pro", "ultra", "ultra2x", "ultra4x", "ultra8x"])
 				.optional()
-				.describe("Task/Deep Research processor tier. lite cheapest/fastest → ultra8x deepest. Default base."),
+				.describe("Task/Deep Research processor tier. lite cheapest/fastest → ultra8x deepest; core2x = 2× core ($0.05/run). Default base."),
 			output_schema: z
 				.union([z.string(), z.record(z.string(), z.any())])
 				.optional()
@@ -754,6 +826,10 @@ const factory = (host) => {
 				.optional()
 				.describe("Task input payload. Defaults to objective/query text."),
 			previous_interaction_id: z.string().optional(),
+			reasoning_effort: z
+				.enum(["low", "medium", "high"])
+				.optional()
+				.describe("operation=responses only. low $10/1k, medium $50/1k (default), high $250/1k — treat high as a budgeted tier."),
 			poll_timeout_ms: z
 				.number()
 				.int()
@@ -776,9 +852,7 @@ const factory = (host) => {
 				const urls = Array.isArray(a.urls) ? a.urls.filter(Boolean) : [];
 				lines.push(`URLs: ${urls.length}`);
 				if (urls.length) lines.push(`First URL: ${urls[0]}`);
-				lines.push(
-					`Excerpts: ${a.excerpts === false ? "off" : "on"}  |  Full content: ${a.full_content ? "on" : "off"}`,
-				);
+				lines.push(`Full content: ${a.full_content ? "on" : "off"}  |  Excerpts: always on (V1)`);
 				const focus = a.objective || a.query;
 				if (focus) lines.push(`Focus: ${focus}`);
 				if (a.session_id) lines.push(`Session: ${a.session_id}`);
@@ -787,6 +861,20 @@ const factory = (host) => {
 
 			if (operation === "task_status") {
 				lines.push(`run_id: ${a.run_id || "(required)"}`);
+				return lines;
+			}
+
+			if (operation === "responses") {
+				const inputPreview =
+					typeof a.task_input === "string"
+						? a.task_input
+						: a.task_input && typeof a.task_input === "object"
+							? JSON.stringify(a.task_input).slice(0, 160)
+							: a.objective || a.query || "(none)";
+				const effort = ["low", "medium", "high"].includes(a.reasoning_effort) ? a.reasoning_effort : "medium";
+				lines.push(`Input: ${String(inputPreview).slice(0, 200)}`);
+				lines.push(`Reasoning effort: ${effort}${a.reasoning_effort ? "" : " (default)"}${effort === "high" ? "  [budgeted tier $250/1k]" : ""}`);
+				if (a.output_schema != null) lines.push("Output schema: set");
 				return lines;
 			}
 
@@ -824,7 +912,7 @@ const factory = (host) => {
 			const mode = normalizeMode(a.mode);
 			const objective = a.objective || a.query || "(none)";
 			const queries = Array.isArray(a.search_queries) ? a.search_queries.filter(Boolean) : [];
-			const maxResults = clampInt(a.max_results ?? a.limit ?? a.num_results, 10, 1, 40);
+			const maxResults = clampInt(a.max_results ?? a.limit ?? a.num_results, 10, 1, 20);
 			lines.push(`Objective: ${String(objective).slice(0, 200)}`);
 			lines.push(
 				`Mode: ${mode}${a.mode ? "" : " (default)"}  |  Results: ${maxResults}${a.max_results != null || a.limit != null || a.num_results != null ? "" : " (default)"}`,
@@ -840,6 +928,7 @@ const factory = (host) => {
 			if (a.location) lines.push(`Location: ${a.location}`);
 			if (a.live_fetch) lines.push("Live fetch: on");
 			else if (a.max_age_seconds != null) lines.push(`Max age seconds: ${a.max_age_seconds}`);
+			if (a.after_date) lines.push(`After date: ${a.after_date}`);
 			if (a.max_chars_per_result != null) lines.push(`Max chars/result: ${a.max_chars_per_result}`);
 			if (a.session_id) lines.push(`Session: ${a.session_id}`);
 			return lines;
@@ -874,6 +963,14 @@ const factory = (host) => {
 							content: [{ type: "text", text: "Error: operation=extract requires urls[]." }],
 						};
 					}
+					const advanced = {};
+					const excerptSettings = {};
+					if (params.max_chars_per_result != null) {
+						excerptSettings.max_chars_per_result = clampInt(params.max_chars_per_result, 10000, 200, 50000);
+					}
+					advanced.excerpt_settings = excerptSettings;
+					// V1: full_content lives under advanced_settings; excerpts can no longer be disabled.
+					advanced.full_content = params.full_content === true;
 					const body = {
 						urls,
 						objective: asString(params.objective) || asString(params.query),
@@ -884,14 +981,8 @@ const factory = (host) => {
 								: undefined,
 						session_id: asString(params.session_id),
 						client_model: asString(params.client_model),
-						advanced_settings: {
-							// Keep defaults sensible; full content opt-in.
-						},
+						advanced_settings: advanced,
 					};
-					// V1 extract uses advanced_settings for excerpt/full content toggles when present.
-					// Also send top-level fields accepted by beta for compatibility.
-					body.excerpts = params.excerpts !== false;
-					body.full_content = params.full_content === true;
 
 					const data = await fetchJson(EXTRACT_URL, auth.token, { body, signal, timeoutMs: 120000 });
 					const returned = Array.isArray(data.results) ? data.results.length : 0;
@@ -1085,6 +1176,56 @@ const factory = (host) => {
 							details: orphanedRun ? { orphanedRun } : undefined,
 						};
 					}
+				}
+
+				if (operation === "responses") {
+					const input =
+						asString(params.task_input) ??
+						asString(params.objective) ??
+						asString(params.query);
+					if (!input) {
+						return {
+							isError: true,
+							content: [
+								{ type: "text", text: "Error: operation=responses requires query, objective, or task_input." },
+							],
+						};
+					}
+					const effort = ["low", "medium", "high"].includes(params.reasoning_effort)
+						? params.reasoning_effort
+						: "medium";
+					const body = {
+						model: "parallel",
+						input,
+						reasoning: { effort },
+					};
+					if (params.output_schema != null) {
+						if (typeof params.output_schema === "string") {
+							body.instructions = params.output_schema;
+						} else if (typeof params.output_schema === "object") {
+							body.text = { format: { type: "json_schema", name: "output", schema: params.output_schema } };
+						}
+					}
+					onUpdate?.({
+						content: [{ type: "text", text: `Parallel responses (effort=${effort})…` }],
+						details: { phase: "responses", effort },
+					});
+					const data = await fetchJson(RESPONSES_URL, auth.token, { body, signal, timeoutMs: 180000 });
+					const text = formatResponsesForLLM(data);
+					return {
+						content: [{ type: "text", text }],
+						details: {
+							response: {
+								provider: "parallel",
+								operation: "responses",
+								authMode: auth.authMode,
+								responseId: data.id,
+								status: data.status,
+								model: data.model,
+								usage: data.usage,
+							},
+						},
+					};
 				}
 
 				// search

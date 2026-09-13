@@ -31,8 +31,7 @@ const RECENCY_DAYS = {
 const RETRY_MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8000;
-// Unbilled GET: 500 remains retryable (unlike billed POSTs, which omit 500).
-const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_STATUS = new Set([408, 422, 425, 429, 500, 502, 503, 504]);
 
 function asAbortError(reason, fallbackMessage) {
 	if (reason && typeof reason === "object" && (reason.name === "AbortError" || reason.name === "TimeoutError")) {
@@ -55,9 +54,19 @@ function parseRetryAfterMs(retryAfterHeader) {
 	return null;
 }
 
-function retryDelayMs(attempt, retryAfterHeader) {
-	// Retry-After is honored verbatim (S3); only computed jitter backoff is clamped.
-	const fromHeader = parseRetryAfterMs(retryAfterHeader);
+/** Parse Arctic Shift X-RateLimit-Reset-At (epoch ms) to a delay in ms; null if absent/in the past. */
+function parseResetAtMs(resetAtHeader) {
+	if (!resetAtHeader) return null;
+	const resetAt = Number(resetAtHeader);
+	if (!Number.isFinite(resetAt) || resetAt <= 0) return null;
+	return Math.max(0, resetAt - Date.now());
+}
+function retryDelayMs(attempt, headerValue, headerName) {
+	// Explicit server-provided wait is honored verbatim (S3); only computed jitter backoff is clamped.
+	const fromHeader =
+		headerName === "x-ratelimit-reset-at"
+			? parseResetAtMs(headerValue)
+			: parseRetryAfterMs(headerValue);
 	if (fromHeader != null) return fromHeader;
 	const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
 	return Math.round(backoff * (0.5 + Math.random() * 0.5));
@@ -174,10 +183,14 @@ async function fetchWithTimeout(url, init, signal, timeoutMs = FETCH_TIMEOUT_MS)
 	try {
 		let lastErrorMessage = "";
 		let lastRetryAfter = undefined;
+		let lastRetryHeaderName = undefined;
 		for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
 			if (attempt > 0) {
-				const headerWaitMs = parseRetryAfterMs(lastRetryAfter);
-				const delay = retryDelayMs(attempt - 1, lastRetryAfter);
+				const headerWaitMs =
+					lastRetryHeaderName === "x-ratelimit-reset-at"
+						? parseResetAtMs(lastRetryAfter)
+						: parseRetryAfterMs(lastRetryAfter);
+				const delay = retryDelayMs(attempt - 1, lastRetryAfter, lastRetryHeaderName);
 				const remaining = deadline - Date.now();
 				// S3: explicit Retry-After beyond remaining budget → fail now, do not retry.
 				if (headerWaitMs != null && headerWaitMs > remaining) {
@@ -193,11 +206,18 @@ async function fetchWithTimeout(url, init, signal, timeoutMs = FETCH_TIMEOUT_MS)
 			try {
 				const res = await fetch(url, { ...init, signal: ctrl.signal });
 				if (RETRYABLE_STATUS.has(res.status) && attempt < RETRY_MAX_ATTEMPTS - 1) {
-					// Prefer Retry-After, then Arctic Shift X-RateLimit-Reset (seconds until reset)
-					lastRetryAfter =
-						res.headers.get("retry-after") ||
-						res.headers.get("x-ratelimit-reset") ||
-						undefined;
+					// Prefer Retry-After, then X-RateLimit-Reset-At (epoch ms), then X-RateLimit-Reset (seconds)
+					lastRetryAfter = res.headers.get("retry-after");
+					lastRetryHeaderName = "retry-after";
+					if (lastRetryAfter == null) {
+						lastRetryAfter = res.headers.get("x-ratelimit-reset-at");
+						lastRetryHeaderName = "x-ratelimit-reset-at";
+					}
+					if (lastRetryAfter == null) {
+						lastRetryAfter = res.headers.get("x-ratelimit-reset");
+						lastRetryHeaderName = "x-ratelimit-reset";
+					}
+					if (lastRetryAfter == null) lastRetryHeaderName = undefined;
 					lastErrorMessage = `HTTP ${res.status} from ${new URL(url).host}`;
 					try { await res.arrayBuffer(); } catch { /* drain */ }
 					continue;
@@ -221,10 +241,17 @@ async function fetchWithTimeout(url, init, signal, timeoutMs = FETCH_TIMEOUT_MS)
 					/slow down|too many|rate|timeout/i.test(String(bodyErr))
 				) {
 					lastErrorMessage = String(bodyErr);
-					lastRetryAfter =
-						res.headers.get("retry-after") ||
-						res.headers.get("x-ratelimit-reset") ||
-						undefined;
+					lastRetryAfter = res.headers.get("retry-after");
+					lastRetryHeaderName = "retry-after";
+					if (lastRetryAfter == null) {
+						lastRetryAfter = res.headers.get("x-ratelimit-reset-at");
+						lastRetryHeaderName = "x-ratelimit-reset-at";
+					}
+					if (lastRetryAfter == null) {
+						lastRetryAfter = res.headers.get("x-ratelimit-reset");
+						lastRetryHeaderName = "x-ratelimit-reset";
+					}
+					if (lastRetryAfter == null) lastRetryHeaderName = undefined;
 					if (attempt < RETRY_MAX_ATTEMPTS - 1) continue;
 					throw new Error(`${lastErrorMessage} (after ${attempt + 1} attempts)`);
 				}
@@ -234,6 +261,7 @@ async function fetchWithTimeout(url, init, signal, timeoutMs = FETCH_TIMEOUT_MS)
 				if (error && (error.name === "AbortError" || error.name === "TimeoutError")) throw error;
 				lastErrorMessage = error instanceof Error ? error.message : String(error);
 				lastRetryAfter = undefined;
+				lastRetryHeaderName = undefined;
 				if (attempt >= RETRY_MAX_ATTEMPTS - 1) {
 					throw new Error(
 						/ \(after \d+ attempts\)$/.test(lastErrorMessage)
