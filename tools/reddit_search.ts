@@ -171,6 +171,20 @@ function sleep(ms, signal) {
  * Shared GET with timeout + retries. Returns the Response plus already-read
  * text/JSON so HTTP-200 body rate-limit signals can re-enter the same loop.
  */
+/**
+ * Preferred retry-timing headers, in precedence order: Retry-After, then
+ * X-RateLimit-Reset-At (epoch ms), then X-RateLimit-Reset (seconds).
+ */
+function pickRetryHeader(res) {
+	let value = res.headers.get("retry-after");
+	if (value != null) return [value, "retry-after"];
+	value = res.headers.get("x-ratelimit-reset-at");
+	if (value != null) return [value, "x-ratelimit-reset-at"];
+	value = res.headers.get("x-ratelimit-reset");
+	if (value != null) return [value, "x-ratelimit-reset"];
+	return [undefined, undefined];
+}
+
 async function fetchWithTimeout(url, init, signal, timeoutMs = FETCH_TIMEOUT_MS) {
 	const deadline = Date.now() + timeoutMs;
 	const ctrl = new AbortController();
@@ -206,18 +220,7 @@ async function fetchWithTimeout(url, init, signal, timeoutMs = FETCH_TIMEOUT_MS)
 			try {
 				const res = await fetch(url, { ...init, signal: ctrl.signal });
 				if (RETRYABLE_STATUS.has(res.status) && attempt < RETRY_MAX_ATTEMPTS - 1) {
-					// Prefer Retry-After, then X-RateLimit-Reset-At (epoch ms), then X-RateLimit-Reset (seconds)
-					lastRetryAfter = res.headers.get("retry-after");
-					lastRetryHeaderName = "retry-after";
-					if (lastRetryAfter == null) {
-						lastRetryAfter = res.headers.get("x-ratelimit-reset-at");
-						lastRetryHeaderName = "x-ratelimit-reset-at";
-					}
-					if (lastRetryAfter == null) {
-						lastRetryAfter = res.headers.get("x-ratelimit-reset");
-						lastRetryHeaderName = "x-ratelimit-reset";
-					}
-					if (lastRetryAfter == null) lastRetryHeaderName = undefined;
+					[lastRetryAfter, lastRetryHeaderName] = pickRetryHeader(res);
 					lastErrorMessage = `HTTP ${res.status} from ${new URL(url).host}`;
 					try { await res.arrayBuffer(); } catch { /* drain */ }
 					continue;
@@ -241,17 +244,7 @@ async function fetchWithTimeout(url, init, signal, timeoutMs = FETCH_TIMEOUT_MS)
 					/slow down|too many|rate|timeout/i.test(String(bodyErr))
 				) {
 					lastErrorMessage = String(bodyErr);
-					lastRetryAfter = res.headers.get("retry-after");
-					lastRetryHeaderName = "retry-after";
-					if (lastRetryAfter == null) {
-						lastRetryAfter = res.headers.get("x-ratelimit-reset-at");
-						lastRetryHeaderName = "x-ratelimit-reset-at";
-					}
-					if (lastRetryAfter == null) {
-						lastRetryAfter = res.headers.get("x-ratelimit-reset");
-						lastRetryHeaderName = "x-ratelimit-reset";
-					}
-					if (lastRetryAfter == null) lastRetryHeaderName = undefined;
+					[lastRetryAfter, lastRetryHeaderName] = pickRetryHeader(res);
 					if (attempt < RETRY_MAX_ATTEMPTS - 1) continue;
 					throw new Error(`${lastErrorMessage} (after ${attempt + 1} attempts)`);
 				}

@@ -401,7 +401,7 @@ ensure_profile_link() {
 
 cmd_mount_check() {
   local f name tok absent=0 extra=0 mounted_n=0 catalog_n=0
-  local mounted=() catalog=() in_catalog
+  local mounted=() catalog=()
   if [[ ! -f "$CATALOG_MD" ]]; then
     echo "error: catalog not found: $CATALOG_MD" >&2
     exit 1
@@ -430,7 +430,6 @@ cmd_mount_check() {
   echo "  device dir:   $DEST_DIR ($mounted_n device file(s))"
   echo "  catalog rows: $catalog_n xd device name(s)"
 
-  in_catalog=""
   for name in "${catalog[@]+"${catalog[@]}"}"; do
     local found=0 f2
     for f2 in "${mounted[@]+"${mounted[@]}"}"; do
