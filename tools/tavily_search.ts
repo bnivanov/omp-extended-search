@@ -177,12 +177,17 @@ async function fetchWithRetry<T>(
 		body?: string;
 		signal?: AbortSignal;
 		timeoutMs?: number;
+		/** false = single attempt, no transport retries (billed job creation). */
+		retry?: boolean;
 	},
 ): Promise<T> {
 	const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
+	// Job creation is not idempotent: never retry a request that starts a
+	// billed run (same rule as the Parallel task-run POST).
+	const maxAttempts = options.retry === false ? 1 : RETRY_MAX_ATTEMPTS;
 	let lastError: Error | null = null;
 
-	for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
 		const ctrl = new AbortController();
 		const timer = setTimeout(() => ctrl.abort(new DOMException("request timeout", "TimeoutError")), timeoutMs);
 		const onAbort = () => ctrl.abort(options.signal?.reason);
@@ -204,7 +209,7 @@ async function fetchWithRetry<T>(
 
 			if (!res.ok) {
 				const errorText = await res.text().catch(() => "");
-				if (RETRYABLE_STATUS[res.status] && attempt < RETRY_MAX_ATTEMPTS - 1) {
+				if (RETRYABLE_STATUS[res.status] && attempt < maxAttempts - 1) {
 					const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
 					await sleepWithAbort(delay, options.signal);
 					continue;
@@ -219,7 +224,7 @@ async function fetchWithRetry<T>(
 			if (error.name === "AbortError" || error.name === "TimeoutError") {
 				if (options.signal?.aborted) throw error;
 			}
-			if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+			if (attempt < maxAttempts - 1) {
 				const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
 				await sleepWithAbort(delay, options.signal);
 				continue;
@@ -577,12 +582,17 @@ const factory = (host: unknown) => {
 					const exc = asStringArray(params.exclude_domains, 20);
 					if (exc) body.exclude_domains = exc;
 
+					// /research is a billed agentic run (mini 4-110 / pro 15-250 credits)
+					// whose request_id only comes back in the response: a retry would
+					// orphan the first billed run and can start a second one. Never
+					// retry this POST — poll research_status with the request_id instead.
 					const data = await fetchWithRetry<TavilyResearchPending | TavilyResearchCompleted>(RESEARCH_URL, {
 						method: "POST",
 						headers: jsonPost,
 						body: JSON.stringify(body),
 						signal,
 						timeoutMs: 120000,
+						retry: false,
 					});
 					return {
 						content: [{ type: "text", text: formatResearchForLLM(data) }],

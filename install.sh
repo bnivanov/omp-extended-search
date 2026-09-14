@@ -469,15 +469,38 @@ cmd_mount_check() {
   return 0
 }
 
+# Detect the sync-managed state of the live deep-research skill. The
+# deep-research repo's sync-skill.sh owns ~/.omp/agent/skills/deep-research
+# with a .sync-stamp drift baseline kept in that repo; the bundled copy in
+# this repo is pre-v2 and must never clobber it. Signature: a stamp/marker
+# file in the destination, or the v2-only files (references/pipeline.md,
+# scripts/validate_claims.py) the pre-v2 bundled copy does not ship.
+skill_dst_sync_managed() {
+  local dst="$1" rel
+  [[ -f "$dst/.sync-stamp" || -f "$dst/.sync-managed" ]] && return 0
+  for rel in references/pipeline.md scripts/validate_claims.py; do
+    [[ -f "$dst/$rel" ]] && return 0
+  done
+  return 1
+}
+
 apply_confirm_rule() {
   # Plan-first gate lives in the skill, not an alwaysApply rule.
   local SKILL_SRC="$ROOT/.agents/skills/deep-research"
   local SKILL_DST="$SKILLS_DIR/deep-research"
   if [[ -d "$SKILL_SRC" ]]; then
-    mkdir -p "$SKILLS_DIR"
-    rm -rf "$SKILL_DST"
-    cp -R "$SKILL_SRC" "$SKILL_DST"
-    echo "Installed skill -> ${SKILL_DST}"
+    if skill_dst_sync_managed "$SKILL_DST"; then
+      echo "Skipped skill copy -> ${SKILL_DST} (sync-managed; the bundled copy is pre-v2)"
+      echo "  This destination is owned by deep-research/scripts/sync-skill.sh"
+      echo "  (.sync-stamp drift baseline in the deep-research repo). Update it by"
+      echo "  running that sync, or delete ${SKILL_DST} and that repo's"
+      echo "  .sync-stamp to hand ownership to this installer."
+    else
+      mkdir -p "$SKILLS_DIR"
+      rm -rf "$SKILL_DST"
+      cp -R "$SKILL_SRC" "$SKILL_DST"
+      echo "Installed skill -> ${SKILL_DST}"
+    fi
   fi
   mkdir -p "$RULES_DIR"
   for stale in omp-search-confirm.md x-search-confirm.md; do
