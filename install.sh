@@ -8,8 +8,13 @@
 #   ./install.sh update --all               converge destination to the full repo set
 #   ./install.sh list                       show install status for every repo tool
 #   ./install.sh uninstall arxiv            remove a previously installed tool
+#   ./install.sh mount-check                diff installed device files against docs/capability-catalog.md
 #
-# Opt-in extras (applied on install/update for the selected tools):
+# Profile parity (opt-in):
+#   --profile               also point ~/.omp/profiles/hermes-jobs/agent/tools at ~/.omp/agent/tools
+#                           (symlink-based parity — the link is created/repaired, never copied)
+#
+# Extras (opt-in, applied on install/update for the selected tools):
 #   --with-confirm-rule    also install the deep-research skill (plan lives in the skill, not a rule)
 #   --with-approval-gate   also set tools.approval.<tool>: allow in ~/.omp/agent/config.yml
 #   --with-gate            both of the above
@@ -23,9 +28,14 @@ CONFIG_YML="${HOME}/.omp/agent/config.yml"
 
 # Canonical short-name order. Keep firecrawl = firecrawl_search; firecrawl-crawl is separate.
 ALL_TOOLS=(x x-api exa parallel tavily hackernews feed arxiv reddit github producthunt firecrawl firecrawl-crawl)
-
+# Profile parity: the profile tools dir must be a symlink to the agent tools dir
+# (profile-parity.py MIRRORED list includes 'tools' — a real dir there is drift).
+PROFILE_NAME="hermes-jobs"
+PROFILE_DIR="${HOME}/.omp/profiles/${PROFILE_NAME}/agent/tools"
+CATALOG_MD="$ROOT/docs/capability-catalog.md"
 WITH_CONFIRM_RULE=0
 WITH_APPROVAL_GATE=0
+WITH_PROFILE=0
 CMD=""
 UPDATE_ALL=0
 SELECTED=()
@@ -34,13 +44,12 @@ TOUCHED=()
 
 usage() {
   cat <<'EOF'
-Usage:
   ./install.sh install <tool>...|all   install selected tools (or every tool)
   ./install.sh <tool>...|all           legacy form — same as install
   ./install.sh update [tool...]        refresh only tools already present in ~/.omp/agent/tools
   ./install.sh update --all            refresh installed tools and add any missing repo tools
   ./install.sh list                    show every repo tool and whether it is installed / outdated
-  ./install.sh uninstall <tool>...     remove named tool files from the destination
+  ./install.sh mount-check              diff device files in ~/.omp/agent/tools against docs/capability-catalog.md
   ./install.sh -h|--help               show this help
 
 Tools (pick one or more):
@@ -63,6 +72,11 @@ Extras (opt-in, applied on install/update for the selected tools):
   --with-confirm-rule    install the deep-research skill (visible plan in chat; not an alwaysApply rule)
   --with-approval-gate   set tools.approval.<tool>: allow in config.yml
   --with-gate            both extras
+
+Profile parity (opt-in, valid with install/update/mount-check):
+  --profile              ensure ~/.omp/profiles/hermes-jobs/agent/tools is a symlink to
+                         ~/.omp/agent/tools (created/repaired if missing/broken — never
+                         a copy) and verify device files reach the profile through it
 
 With no arguments this prints the help and installs nothing.
 EOF
@@ -323,15 +337,170 @@ cmd_update() {
   done
 }
 
+# --- profile parity (symlink-based; profile-parity.py MIRRORED includes 'tools') ---
+
+# Read-only report of the profile link state. Used by mount-check (validate only).
+check_profile_link() {
+  local target
+  if [[ -L "$PROFILE_DIR" ]]; then
+    if [[ -e "$PROFILE_DIR" ]]; then
+      target="$(readlink "$PROFILE_DIR")"
+      if [[ "$target" == "$DEST_DIR" ]]; then
+        echo "profile link ok: $PROFILE_DIR -> $DEST_DIR"
+      else
+        echo "profile link MISMATCH: $PROFILE_DIR -> $target (expected $DEST_DIR)"
+      fi
+    else
+      echo "profile link BROKEN: $PROFILE_DIR -> $(readlink "$PROFILE_DIR")"
+    fi
+  elif [[ -d "$PROFILE_DIR" ]]; then
+    echo "profile tools is a REAL DIRECTORY at $PROFILE_DIR — parity must be a symlink to $DEST_DIR (profile-parity flags this as drift)"
+  else
+    echo "profile link MISSING: $PROFILE_DIR (run 'install.sh --profile install <tool>' or 'install.sh --profile update' to create it)"
+  fi
+}
+
+# Create/repair the profile tools symlink so profile sessions see the same
+# device files as the agent root. Symlink only — never copy (copies drift).
+ensure_profile_link() {
+  local target f n=0
+  if [[ -L "$PROFILE_DIR" && -e "$PROFILE_DIR" ]]; then
+    target="$(readlink "$PROFILE_DIR")"
+    if [[ "$target" == "$DEST_DIR" ]]; then
+      echo "Profile link ok: $PROFILE_DIR -> $DEST_DIR"
+    else
+      ln -sfn "$DEST_DIR" "$PROFILE_DIR"
+      echo "Re-linked profile tools: $PROFILE_DIR -> $DEST_DIR (was -> $target)"
+    fi
+  elif [[ -L "$PROFILE_DIR" ]]; then
+    rm -f "$PROFILE_DIR"
+    ln -s "$DEST_DIR" "$PROFILE_DIR"
+    echo "Repaired broken profile link: $PROFILE_DIR -> $DEST_DIR"
+  elif [[ -d "$PROFILE_DIR" ]]; then
+    echo "error: $PROFILE_DIR is a real directory — parity must be a symlink to $DEST_DIR" >&2
+    echo "       (profile-parity.py treats a real dir as drift; move it aside and re-run)" >&2
+    exit 1
+  else
+    mkdir -p "$(dirname "$PROFILE_DIR")"
+    ln -s "$DEST_DIR" "$PROFILE_DIR"
+    echo "Linked profile tools: $PROFILE_DIR -> $DEST_DIR"
+  fi
+  # Confirm device files reach the profile through the link (not copies).
+  for f in "$DEST_DIR"/*.ts; do
+    [[ -e "$f" ]] || continue
+    n=$((n + 1))
+    if [[ ! -f "$PROFILE_DIR/$(basename "$f")" ]]; then
+      echo "error: device file did not reach the profile: $(basename "$f")" >&2
+      exit 1
+    fi
+  done
+  echo "Profile devices verified: $n file(s) reachable through $PROFILE_DIR"
+}
+
+# --- mount verification: device files vs docs/capability-catalog.md ---
+
+cmd_mount_check() {
+  local f name tok absent=0 extra=0 mounted_n=0 catalog_n=0
+  local mounted=() catalog=()
+  if [[ ! -f "$CATALOG_MD" ]]; then
+    echo "error: catalog not found: $CATALOG_MD" >&2
+    exit 1
+  fi
+
+  # Mounted devices: every *.ts device file in the destination dir.
+  for f in "$DEST_DIR"/*.ts; do
+    [[ -e "$f" ]] || continue
+    mounted+=("$(basename "$f" .ts)")
+    mounted_n=$((mounted_n + 1))
+  done
+
+  # Catalog xd device names: backticked *_search / *_crawl / x_api tokens read
+  # from the Tool column (awk field 3 of table rows) — whole-file backtick
+  # matching would also catch parameter names like tavily's `safe_search`.
+  # (web_search is the native OMP lane, not an xd device.)
+  while IFS= read -r tok; do
+    case "$tok" in
+      web_search) continue ;;
+      *_search|*_crawl|x_api) catalog+=("$tok") ;;
+    esac
+  done < <(awk -F'|' '/^\|/ {print $3}' "$CATALOG_MD" | grep -oE '`[A-Za-z0-9_]+`' | tr -d '`' | sort -u)
+  catalog_n="${#catalog[@]}"
+
+  echo "mount-check: device files vs docs/capability-catalog.md"
+  echo "  device dir:   $DEST_DIR ($mounted_n device file(s))"
+  echo "  catalog rows: $catalog_n xd device name(s)"
+
+  for name in "${catalog[@]+"${catalog[@]}"}"; do
+    local found=0 f2
+    for f2 in "${mounted[@]+"${mounted[@]}"}"; do
+      if [[ "$f2" == "$name" ]]; then
+        found=1
+        break
+      fi
+    done
+    if [[ "$found" -eq 1 ]]; then
+      printf '  ok      %s\n' "$name"
+    else
+      printf '  absent  %s        (cataloged, no device file — install it, then restart omp)\n' "$name"
+      absent=$((absent + 1))
+    fi
+  done
+
+  for name in "${mounted[@]+"${mounted[@]}"}"; do
+    local cataloged=0
+    for tok in "${catalog[@]+"${catalog[@]}"}"; do
+      if [[ "$tok" == "$name" ]]; then
+        cataloged=1
+        break
+      fi
+    done
+    if [[ "$cataloged" -eq 0 ]]; then
+      printf '  extra   %s        (mounted, not named in the catalog)\n' "$name"
+      extra=$((extra + 1))
+    fi
+  done
+
+  echo "  note: a live session's xd:// mount list may still lag until restart —"
+  echo "        this checks device files, not a running session's mounts"
+  if [[ $absent -gt 0 || $extra -gt 0 ]]; then
+    echo "  drift: $absent absent, $extra extra"
+    return 1
+  fi
+  return 0
+}
+
+# Detect the sync-managed state of the live deep-research skill. The
+# deep-research repo's sync-skill.sh owns ~/.omp/agent/skills/deep-research
+# with a .sync-stamp drift baseline kept in that repo; the bundled copy in
+# this repo is pre-v2 and must never clobber it. Signature: a stamp/marker
+# file in the destination, or the v2-only files (references/pipeline.md,
+# scripts/validate_claims.py) the pre-v2 bundled copy does not ship.
+skill_dst_sync_managed() {
+  local dst="$1" rel
+  [[ -f "$dst/.sync-stamp" || -f "$dst/.sync-managed" ]] && return 0
+  for rel in references/pipeline.md scripts/validate_claims.py; do
+    [[ -f "$dst/$rel" ]] && return 0
+  done
+  return 1
+}
+
 apply_confirm_rule() {
   # Plan-first gate lives in the skill, not an alwaysApply rule.
   local SKILL_SRC="$ROOT/.agents/skills/deep-research"
   local SKILL_DST="$SKILLS_DIR/deep-research"
   if [[ -d "$SKILL_SRC" ]]; then
-    mkdir -p "$SKILLS_DIR"
-    rm -rf "$SKILL_DST"
-    cp -R "$SKILL_SRC" "$SKILL_DST"
-    echo "Installed skill -> ${SKILL_DST}"
+    if skill_dst_sync_managed "$SKILL_DST"; then
+      echo "Skipped skill copy -> ${SKILL_DST} (sync-managed; the bundled copy is pre-v2)"
+      echo "  This destination is owned by deep-research/scripts/sync-skill.sh"
+      echo "  (.sync-stamp drift baseline in the deep-research repo). Update it by"
+      echo "  running that sync, or delete ${SKILL_DST} and that repo's"
+      echo "  .sync-stamp to hand ownership to this installer."
+    else
+      mkdir -p "$SKILLS_DIR"
+      rm -rf "$SKILL_DST"
+      cp -R "$SKILL_SRC" "$SKILL_DST"
+      echo "Installed skill -> ${SKILL_DST}"
+    fi
   fi
   mkdir -p "$RULES_DIR"
   for stale in omp-search-confirm.md x-search-confirm.md; do
@@ -461,14 +630,28 @@ print_epilogue() {
 }
 
 # --- argument parsing ---
-if [[ "$#" -eq 0 ]]; then
+# Pre-scan: --profile is valid before or after the subcommand.
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --profile) WITH_PROFILE=1 ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+if [[ "${#ARGS[@]}" -eq 0 ]]; then
+  if [[ "$WITH_PROFILE" -eq 1 ]]; then
+    echo "error: --profile needs a subcommand (install/update/list/mount-check/uninstall)" >&2
+    usage >&2
+    exit 1
+  fi
   usage
   exit 0
 fi
+set -- "${ARGS[@]}"
 
 # First non-flag token may be a subcommand.
 case "${1:-}" in
-  install|update|list|uninstall)
+  install|update|list|uninstall|mount-check)
     CMD="$1"
     shift
     ;;
@@ -481,6 +664,7 @@ case "${1:-}" in
     CMD="install"
     ;;
 esac
+
 
 while [[ "$#" -gt 0 ]]; do
   arg="$1"
@@ -530,9 +714,20 @@ done
 dedupe_selected
 
 case "$CMD" in
-  list)
+  mount-check)
     if [[ "${#SELECTED[@]}" -gt 0 || "$UPDATE_ALL" -eq 1 || "$WITH_CONFIRM_RULE" -eq 1 || "$WITH_APPROVAL_GATE" -eq 1 ]]; then
-      echo "error: list does not take tool names or extras" >&2
+      echo "error: mount-check does not take tool names or extras" >&2
+      usage >&2
+      exit 1
+    fi
+    if [[ "$WITH_PROFILE" -eq 1 ]]; then
+      check_profile_link
+    fi
+    cmd_mount_check
+    ;;
+  list)
+    if [[ "${#SELECTED[@]}" -gt 0 || "$UPDATE_ALL" -eq 1 || "$WITH_CONFIRM_RULE" -eq 1 || "$WITH_APPROVAL_GATE" -eq 1 || "$WITH_PROFILE" -eq 1 ]]; then
+      echo "error: list does not take tool names, extras, or --profile" >&2
       usage >&2
       exit 1
     fi
@@ -540,8 +735,8 @@ case "$CMD" in
     exit 0
     ;;
   uninstall)
-    if [[ "$WITH_CONFIRM_RULE" -eq 1 || "$WITH_APPROVAL_GATE" -eq 1 ]]; then
-      echo "error: extras are not valid with uninstall" >&2
+    if [[ "$WITH_CONFIRM_RULE" -eq 1 || "$WITH_APPROVAL_GATE" -eq 1 || "$WITH_PROFILE" -eq 1 ]]; then
+      echo "error: extras or --profile are not valid with uninstall" >&2
       exit 1
     fi
     cmd_uninstall
@@ -551,6 +746,9 @@ case "$CMD" in
     cmd_install
     if [[ "$WITH_CONFIRM_RULE" -eq 1 ]]; then
       apply_confirm_rule
+    fi
+    if [[ "$WITH_PROFILE" -eq 1 ]]; then
+      ensure_profile_link
     fi
     if [[ "$WITH_APPROVAL_GATE" -eq 1 ]]; then
       apply_approval_gate
@@ -564,6 +762,9 @@ case "$CMD" in
     fi
     if [[ "$WITH_APPROVAL_GATE" -eq 1 ]]; then
       apply_approval_gate
+    fi
+    if [[ "$WITH_PROFILE" -eq 1 ]]; then
+      ensure_profile_link
     fi
     if [[ "$UPDATE_ALL" -eq 1 ]]; then
       print_epilogue "updated/added"

@@ -17,6 +17,7 @@ const FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RESULTS = 10;
 const MIN_SEARCH_RESULTS = 10;
 const MAX_PAGE_RESULTS = 100;
+const MAX_ARCHIVE_RESULTS = 500; // full-archive pages bill per post read — 500 is the upstream ceiling (recent search caps at 100)
 const MAX_LOOKUP_IDS = 100;
 const POST_READ_USD = 0.005;
 const USER_READ_USD = 0.01;
@@ -38,6 +39,7 @@ const TWEET_FIELDS = [
 	"lang",
 	"referenced_tweets",
 	"possibly_sensitive",
+	"paid_partnership",
 ].join(",");
 const USER_FIELDS = [
 	"id",
@@ -437,7 +439,8 @@ async function xFetch(path, token, signal, timeoutMs = FETCH_TIMEOUT_MS) {
 }
 
 function searchMaxResults(params) {
-	return clampInt(params.max_results ?? params.limit, DEFAULT_MAX_RESULTS, MIN_SEARCH_RESULTS, MAX_PAGE_RESULTS);
+	const max = params.operation === "archive" ? MAX_ARCHIVE_RESULTS : MAX_PAGE_RESULTS;
+	return clampInt(params.max_results ?? params.limit, DEFAULT_MAX_RESULTS, MIN_SEARCH_RESULTS, max);
 }
 
 function buildSearchQuery(params, extra, maxLen = 512) {
@@ -577,9 +580,8 @@ export default function xApiToolFactory(api) {
 			id: z.string().optional().describe("Single post id or status URL (lookup/thread)."),
 			conversation_id: z.string().optional().describe("Thread id. Defaults to the looked-up post's conversation_id."),
 			username: z.string().optional().describe("Handle without @ for user and timeline."),
-			allowed_handles: z.array(z.string()).optional().describe("Convenience: AND a from: clause (OR if several)."),
-			max_results: z.number().int().min(10).max(100).optional().describe("Posts per page, 10–100 (default 10)."),
-			limit: z.number().int().min(10).max(100).optional().describe("Alias of max_results."),
+			max_results: z.number().int().min(10).max(500).optional().describe("Posts per page, 10–100 (default 10); operation=archive accepts up to 500 (upstream full-archive ceiling — fewer billed requests on bulk pulls)."),
+			limit: z.number().int().min(10).max(500).optional().describe("Alias of max_results (archive caps at 500, recent at 100)."),
 			next_token: z.string().optional().describe("Pagination token from a previous call. Never auto-walked."),
 			sort_order: z.enum(["recency", "relevancy"]).optional().describe("Search ranking (default API recency)."),
 			recency: z.enum(["day", "week", "month", "year"]).optional().describe("Maps to start_time. recent rejects windows older than 7 days."),
@@ -618,10 +620,8 @@ export default function xApiToolFactory(api) {
 		label: "X API v2",
 		approval: "read",
 		description: [
-			"Read-only X API v2. Use for exact operators, public_metrics, threads, user/timeline dumps, and post counts.",
-			"Not Grok synthesis — that is x_search. Not write/DM/follow/stream/home timeline.",
-			"operation=recent (last 7 days, default) | archive (full archive, 2006+) | lookup | thread | user | timeline | counts.",
-			"Auth: X_BEARER_TOKEN or TWITTER_BEARER_TOKEN. Costs ~$0.005 per post read; default max_results=10; pass next_token yourself.",
+			"operation=recent (last 7 days, default) | archive (full archive, 2006+) | lookup | thread | user | timeline | counts. archive accepts max_results up to 500 (recent caps at 100).",
+			"Auth: X_BEARER_TOKEN or TWITTER_BEARER_TOKEN. Costs ~$0.005 per post read (Owned Reads for own data: $0.001/resource); from 2026-09-21 billing is per-resource ($5/1k posts + $10/1k profiles, parent+quoted posts count); default max_results=10; pass next_token yourself.",
 		].join(" "),
 		parameters,
 		formatApprovalDetails(args) {

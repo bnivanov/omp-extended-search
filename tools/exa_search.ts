@@ -13,7 +13,7 @@
  *   2. EXA_API_KEY
  *
  * Env knobs:
- *   OMP_EXA_DEFAULT_TYPE          auto|fast|neural|deep   (default auto)
+ *   OMP_EXA_DEFAULT_TYPE          auto|instant|fast|deep-lite|deep|deep-reasoning  (default auto)
  *   OMP_EXA_DEFAULT_NUM_RESULTS   number                  (default 10)
  *   OMP_EXA_DEFAULT_CONTENTS      summary|text|highlights|none|all  (default summary)
  */
@@ -22,18 +22,19 @@ const EXA_SEARCH_URL = "https://api.exa.ai/search";
 const EXA_ANSWER_URL = "https://api.exa.ai/answer";
 const EXA_CONTENTS_URL = "https://api.exa.ai/contents";
 
-const VALID_TYPES = new Set(["auto", "fast", "neural", "deep", "keyword", "instant"]);
+const VALID_TYPES = new Set(["instant", "fast", "auto", "deep-lite", "deep", "deep-reasoning"]);
 const VALID_CATEGORIES = new Set([
 	"company",
-	"research paper",
+	"publication",
 	"news",
-	"pdf",
-	"github",
 	"personal site",
 	"people",
 	"financial report",
-	"tweet",
 ]);
+// legacy category names accepted client-side, rewritten before send
+const CATEGORY_ALIASES = {
+	"research paper": "publication",
+};
 const VALID_CONTENTS = new Set(["summary", "text", "highlights", "none", "all"]);
 const VALID_OPS = new Set(["search", "answer", "contents"]);
 
@@ -69,7 +70,7 @@ function asStringArray(value, max = 50) {
 
 function normalizeType(type) {
 	const t = (type || DEFAULT_TYPE).toLowerCase();
-	if (t === "keyword" || t === "instant") return "fast";
+	if (t === "keyword") return "fast";
 	return VALID_TYPES.has(t) ? t : "auto";
 }
 
@@ -85,20 +86,24 @@ function buildContents(params) {
 	if (wantAll || mode === "text" || params.text_max_characters) {
 		contents.text =
 			params.text_max_characters != null
-				? { maxCharacters: clampInt(params.text_max_characters, 2000, 100, 50000) }
+				? { maxCharacters: clampInt(params.text_max_characters, 2000, 100, 10000) }
 				: true;
 	}
 	if (wantAll || mode === "highlights" || params.highlights_query) {
 		const highlights = {};
 		if (params.highlights_query) highlights.query = params.highlights_query;
-		if (params.highlights_per_url != null) {
-			highlights.highlightsPerUrl = clampInt(params.highlights_per_url, 3, 1, 10);
-		}
-		if (params.highlights_num_sentences != null) {
-			highlights.numSentences = clampInt(params.highlights_num_sentences, 3, 1, 20);
+		if (params.highlights_max_characters != null) {
+			highlights.maxCharacters = clampInt(params.highlights_max_characters, 1000, 100, 5000);
 		}
 		contents.highlights = Object.keys(highlights).length ? highlights : true;
 	}
+	if (params.subpages != null) {
+		contents.subpages = clampInt(params.subpages, 0, 0, 100);
+	}
+	const subpageTarget = asStringArray(params.subpage_target, 25);
+	if (subpageTarget) contents.subpageTarget = subpageTarget;
+	const extras = asStringArray(params.extras, 10);
+	if (extras) contents.extras = extras;
 
 	// If caller only asked for summary (default) keep that lean path.
 	if (!Object.keys(contents).length) {
@@ -348,7 +353,6 @@ function formatSearchForLLM(data, meta, pagination) {
 	const lines = [];
 	lines.push(`# Exa search (${meta.type}${meta.category ? `, category=${meta.category}` : ""})`);
 	if (data.requestId) lines.push(`requestId: ${data.requestId}`);
-	if (data.resolvedSearchType) lines.push(`resolvedSearchType: ${data.resolvedSearchType}`);
 	if (data.costDollars?.total != null) lines.push(`costUSD: ${data.costDollars.total}`);
 	if (data.searchTime != null) lines.push(`searchTimeMs: ${data.searchTime}`);
 	if (data.numSearches != null) lines.push(`numSearches: ${data.numSearches}`);
@@ -376,6 +380,23 @@ function formatSearchForLLM(data, meta, pagination) {
 		}
 		lines.push("");
 	});
+	if (data.output != null) {
+		lines.push("## Structured output");
+		lines.push(typeof data.output === "string" ? data.output : JSON.stringify(data.output, null, 2));
+		const grounding = Array.isArray(data.grounding) ? data.grounding : [];
+		if (grounding.length) {
+			lines.push("");
+			lines.push("### Grounding");
+			for (const g of grounding.slice(0, 25)) {
+				if (!g || typeof g !== "object") continue;
+				const field = asString(g.field) || "?";
+				const conf = g.confidence != null ? ` confidence=${g.confidence}` : "";
+				const url = asString(g.url);
+				lines.push(`- ${field}${conf}${url ? ` — ${url}` : ""}`);
+			}
+		}
+		lines.push("");
+	}
 	let text = lines.join("\n").trimEnd();
 	if (pagination) text = `${text}\n\n${formatPaginationLine(pagination)}`;
 	return text;
@@ -416,7 +437,8 @@ function buildSearchBody(params) {
 	const contents = buildContents(params);
 	if (contents) body.contents = contents;
 
-	const category = asString(params.category)?.toLowerCase();
+	const rawCategory = asString(params.category)?.toLowerCase();
+	const category = rawCategory && CATEGORY_ALIASES[rawCategory] ? CATEGORY_ALIASES[rawCategory] : rawCategory;
 	if (category && VALID_CATEGORIES.has(category)) body.category = category;
 
 	const includeDomains = asStringArray(params.include_domains);
@@ -426,24 +448,22 @@ function buildSearchBody(params) {
 
 	if (asString(params.start_published_date)) body.startPublishedDate = params.start_published_date;
 	if (asString(params.end_published_date)) body.endPublishedDate = params.end_published_date;
-	if (asString(params.start_crawl_date)) body.startCrawlDate = params.start_crawl_date;
-	if (asString(params.end_crawl_date)) body.endCrawlDate = params.end_crawl_date;
-
-	const includeText = asStringArray(params.include_text, 5);
-	const excludeText = asStringArray(params.exclude_text, 5);
-	if (includeText) body.includeText = includeText;
-	if (excludeText) body.excludeText = excludeText;
 
 	if (asString(params.user_location)) body.userLocation = params.user_location;
 
-	const additional = asStringArray(params.additional_queries, 5);
+	const additional = asStringArray(params.additional_queries, 10);
 	if (additional) body.additionalQueries = additional;
 
 	if (params.moderation === true) body.moderation = true;
 
-	// livecrawl / freshness hints when provided
-	if (asString(params.livecrawl)) body.livecrawl = params.livecrawl;
-	if (params.max_age_hours != null) body.maxAgeHours = clampInt(params.max_age_hours, 24, 0, 24 * 365 * 5);
+	// freshness hint (livecrawl deprecated upstream — maxAgeHours only, API max 720)
+	if (params.max_age_hours != null) body.maxAgeHours = clampInt(params.max_age_hours, 24, 0, 720);
+
+	// grounded structured synthesis
+	if (params.output_schema != null && typeof params.output_schema === "object") {
+		body.outputSchema = params.output_schema;
+	}
+	if (asString(params.system_prompt)) body.systemPrompt = params.system_prompt;
 
 	return { body, type, numResults, category };
 }
@@ -460,11 +480,11 @@ const factory = (host) => {
 		approval: "read",
 		description: [
 			"Full Exa web search (and answer) with explicit mode control.",
-			"Use when the user asks to search with Exa, expand web_search with Exa, or needs semantic/neural/deep retrieval, category filters (company/people/papers/news/github), domain/date filters, or a cited Exa answer.",
+			"Use when the user asks to search with Exa, expand web_search with Exa, or needs semantic/deep retrieval, category filters (company/publication/news/personal site/people/financial report), domain/date filters, grounded structured synthesis, or a cited Exa answer.",
 			"Prefer over generic web_search when Exa-specific depth or filters matter.",
-			"operation=search (default): Exa Search API. type=auto|fast|neural|deep.",
-			"operation=answer: Exa Answer API (short cited answer).",
-			"operation=contents: fetch full contents for known URLs via Exa.",
+			"operation=search (default): Exa Search API. type=instant|fast|auto|deep-lite|deep|deep-reasoning (deep-lite $12/1k, deep-reasoning $15/1k).",
+			"operation=answer: Exa Answer API (short cited answer, $5/1k).",
+			"operation=contents: fetch full contents for known URLs via Exa (up to 100 URLs; $1/1k per content type).",
 			"Do not use for X/Twitter posts (use x_search) or Parallel-only research processors (use parallel_search).",
 		].join(" "),
 		parameters: z.object({
@@ -477,9 +497,9 @@ const factory = (host) => {
 				.optional()
 				.describe("search=Exa Search API (default); answer=Exa Answer API; contents=fetch URLs."),
 			type: z
-				.enum(["auto", "fast", "neural", "deep", "keyword", "instant"])
+				.enum(["instant", "fast", "auto", "deep-lite", "deep", "deep-reasoning"])
 				.optional()
-				.describe("Search type for operation=search. auto (default) balances quality; fast is cheap/quick; neural is semantic; deep expands multi-angle (~costlier). keyword/instant map to fast."),
+				.describe("Search type for operation=search. auto (default) balances quality; fast is cheap/quick; deep-lite/deep-reasoning are the deep tiers (costlier, deep-reasoning highest). keyword maps to fast."),
 			num_results: z.number().int().min(1).max(100).optional().describe("Result count (default 10, max 100)."),
 			limit: z.number().int().min(1).max(100).optional().describe("Alias of num_results."),
 			contents: z
@@ -487,41 +507,36 @@ const factory = (host) => {
 				.optional()
 				.describe("Per-result content packing. summary (default) is cheapest useful; all is richest; none is links-only."),
 			category: z
-				.enum([
-					"company",
-					"research paper",
-					"news",
-					"pdf",
-					"github",
-					"personal site",
-					"people",
-					"financial report",
-					"tweet",
-				])
+				.enum(["company", "publication", "news", "personal site", "people", "financial report"])
 				.optional()
-				.describe("Restrict to an Exa vertical index."),
+				.describe("Restrict to an Exa vertical index. Legacy 'research paper' maps to 'publication'."),
 			include_domains: z.array(z.string()).optional().describe("Only these domains."),
 			exclude_domains: z.array(z.string()).optional().describe("Exclude these domains."),
 			start_published_date: z.string().optional().describe("ISO date/time lower bound for published date."),
 			end_published_date: z.string().optional().describe("ISO date/time upper bound for published date."),
-			start_crawl_date: z.string().optional(),
-			end_crawl_date: z.string().optional(),
-			include_text: z.array(z.string()).optional().describe("Require these phrases in the page."),
-			exclude_text: z.array(z.string()).optional(),
-			additional_queries: z.array(z.string()).optional().describe("Extra query variants (deep/advanced)."),
+			additional_queries: z.array(z.string()).optional().describe("Extra query variants (deep types only, max 10)."),
 			summary_query: z.string().optional().describe("Override summary focus query."),
 			highlights_query: z.string().optional(),
-			highlights_per_url: z.number().int().min(1).max(10).optional(),
-			highlights_num_sentences: z.number().int().min(1).max(20).optional(),
-			text_max_characters: z.number().int().min(100).max(50000).optional(),
+			highlights_max_characters: z.number().int().min(100).max(5000).optional(),
+			text_max_characters: z.number().int().min(100).max(10000).optional(),
 			user_location: z.string().optional().describe("ISO country code bias, e.g. US."),
 			moderation: z.boolean().optional(),
-			livecrawl: z.string().optional().describe("Exa livecrawl preference when supported (e.g. fallback/preferred)."),
-			max_age_hours: z.number().int().min(0).optional().describe("Prefer fresher pages when supported."),
+			max_age_hours: z.number().int().min(0).max(720).optional().describe("Prefer pages fresher than this (replaces deprecated livecrawl; API max 720)."),
+			subpages: z.number().int().min(0).max(100).optional().describe("Also fetch N subpages per result (contents sub-option)."),
+			subpage_target: z.array(z.string()).optional().describe("Subpage path hints to target, e.g. ['about','pricing']."),
+			extras: z
+				.array(z.string())
+				.optional()
+				.describe("Extra content per result, e.g. ['links','imageLinks','codeBlocks']."),
+			output_schema: z
+				.record(z.string(), z.any())
+				.optional()
+				.describe("JSON schema for grounded structured synthesis (operation=search): returns data.output with field-level grounding/confidence. Adds ~2s latency + synthesis cost."),
+			system_prompt: z.string().optional().describe("System prompt guiding grounded synthesis (operation=search)."),
 			urls: z
 				.array(z.string())
 				.optional()
-				.describe("For operation=contents: URLs to fetch (max 20)."),
+				.describe("For operation=contents: URLs to fetch (max 100)."),
 			text: z.boolean().optional().describe("For operation=answer: include source text in citations."),
 		}),
 
@@ -566,7 +581,8 @@ const factory = (host) => {
 				lines.push(`Additional queries: ${a.additional_queries.length}`);
 			}
 			if (a.user_location) lines.push(`Location bias: ${a.user_location}`);
-			if (a.livecrawl) lines.push(`Livecrawl: ${a.livecrawl}`);
+			if (a.output_schema != null) lines.push("Grounded synthesis: output_schema set");
+			if (a.system_prompt) lines.push(`System prompt: ${String(a.system_prompt).slice(0, 80)}`);
 			if (a.max_age_hours != null) lines.push(`Max age hours: ${a.max_age_hours}`);
 			return lines;
 		},
@@ -624,7 +640,7 @@ const factory = (host) => {
 				}
 
 				if (operation === "contents") {
-					const urls = asStringArray(params.urls, 20);
+					const urls = asStringArray(params.urls, 100);
 					if (!urls?.length) {
 						return {
 							isError: true,
@@ -665,7 +681,7 @@ const factory = (host) => {
 
 				// search
 				const { body, type, numResults, category } = buildSearchBody(params);
-				const timeout = type === "deep" ? 180000 : 120000;
+				const timeout = type === "deep" || type === "deep-reasoning" ? 180000 : 120000;
 				const data = await fetchJson(EXA_SEARCH_URL, auth.token, body, signal, timeout);
 				const sources = (Array.isArray(data.results) ? data.results : [])
 					.filter((r) => asString(r.url))
@@ -695,7 +711,6 @@ const factory = (host) => {
 							category,
 							authMode: auth.authMode,
 							requestId: data.requestId,
-							resolvedSearchType: data.resolvedSearchType,
 							costDollars: data.costDollars,
 							searchTime: data.searchTime,
 							numSearches: data.numSearches,
